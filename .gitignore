@@ -1,12 +1,11 @@
-# macOS Finder 元数据
+# macOS
 .DS_Store
 **/.DS_Store
 
-# 个人预订凭证——本地归档，不入仓库
+# 你的预订凭证 PDF / 个人文件,放本地、勿提交
 bookings/
-
-# 本地 AI 指令文件,不入仓库
 CLAUDE.md
+AGENTS.md
 
 # Cloudflare / Node 本地状态与 secret
 node_modules/

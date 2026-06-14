@@ -1,7 +1,7 @@
 {
-  "name": "路书 Roadbook",
+  "name": "路书",
   "short_name": "路书",
-  "description": "路书 Roadbook · 自驾路书(行程/清单/太阳/天气离线可读)",
+  "description": "路书 · 自驾路书(行程/清单/太阳/天气离线可读)",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": ".",
