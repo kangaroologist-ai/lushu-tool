@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local wrangler dev.
+# Never commit real values.
+APP_PASSWORD="change-me"
+AUTH_SECRET="replace-with-long-random-string"
+GH_TOKEN="github_pat_..."

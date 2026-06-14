@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "roadbook",
+  "main": "worker.js",
+  "compatibility_date": "2026-06-12",
+  "build": {
+    "command": "npm run gen:fallback && npm run build:offline-map && npm run build:assets"
+  },
+  "assets": {
+    "directory": ".worker-assets",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "secrets": {
+    "required": ["APP_PASSWORD", "AUTH_SECRET", "GH_TOKEN"]
+  },
+  "vars": {
+    "GH_OWNER": "your-org",
+    "GH_REPO": "your-repo",
+    "GH_BRANCH": "main"
+  }
+}

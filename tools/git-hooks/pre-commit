@@ -1,0 +1,16 @@
+#!/bin/sh
+# pre-commit — 主方案 MD 进了本次提交时,自动再生 trip.data.js(file:// 双击兜底),
+# 免去手动跑 gen-fallback。trip.data.js 随同一提交入库,git 历史里二者永不脱节。
+#
+# 挂接(克隆后跑一次): ln -sf ../../tools/git-hooks/pre-commit .git/hooks/pre-commit
+
+MAIN_MD="sample-trip.md"
+
+# 只在本次提交确实含主方案 MD 时动手;-z 输出原始 UTF-8 文件名,绕开 core.quotepath 转义错配。
+if git diff --cached --name-only -z | tr '\0' '\n' | grep -Fxq "$MAIN_MD"; then
+  if ! node tools/gen-fallback.mjs; then
+    echo "[pre-commit] gen-fallback 失败,提交已中止(按上方行号修正主方案 MD 后重试)" >&2
+    exit 1
+  fi
+  git add trip.data.js
+fi

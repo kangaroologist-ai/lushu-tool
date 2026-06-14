@@ -1,0 +1,17 @@
+# macOS Finder 元数据
+.DS_Store
+**/.DS_Store
+
+# 个人预订凭证——本地归档，不入仓库
+bookings/
+
+# 本地 AI 指令文件,不入仓库
+CLAUDE.md
+
+# Cloudflare / Node 本地状态与 secret
+node_modules/
+.wrangler/
+.worker-assets/
+.map-source/
+.dev.vars
+.env

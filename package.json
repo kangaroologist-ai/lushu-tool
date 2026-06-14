@@ -1,0 +1,22 @@
+{
+  "name": "lushu",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tools/roundtrip-test.mjs && node tools/functions-test.mjs && node tools/sw-test.mjs && node tools/worker-test.mjs && node tools/offline-map-test.mjs",
+    "gen:fallback": "node tools/gen-fallback.mjs",
+    "gen:auth-secret": "node tools/gen-auth-secret.mjs",
+    "build:offline-map": "node tools/offline-map/build-corridor.mjs",
+    "build:assets": "node tools/build-worker-assets.mjs",
+    "check:secrets": "node tools/check-worker-secrets.mjs",
+    "dev": "npm run build:offline-map && npm run build:assets && wrangler dev worker.js",
+    "deploy:bootstrap": "wrangler deploy --keep-vars",
+    "deploy": "npm run check:secrets && wrangler deploy --keep-vars",
+    "smoke:prod": "node tools/prod-smoke.mjs",
+    "smoke:writeback": "node tools/prod-writeback-smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
+}

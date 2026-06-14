@@ -1,0 +1,2947 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>路书 · Roadbook</title>
+<!-- PWA(P4.4):manifest / 主题色 / iOS 主屏图标。相对路径,部署到任意子路径都成立 -->
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- 浏览器态 Safari/Android 用 theme-color 给状态栏/工具栏着色,需与地图底色一致;PWA standalone 的 iOS 状态栏走 black-translucent,不受影响;manifest.webmanifest 的 theme_color 不动 -->
+<meta name="theme-color" content="#dfe7e0">
+<link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="路书">
+<!-- SW 注册:仅 http(s) 且支持 serviceWorker 时;file:// 双击不注册,走页面三级降级。失败 catch 不报错 -->
+<script>
+(function(){
+  if(!("serviceWorker" in navigator))return;
+  if(location.protocol!=="http:"&&location.protocol!=="https:")return;   // file:// 不注册 SW
+  window.addEventListener("load",function(){
+    navigator.serviceWorker.register("./sw.js",{scope:"./"}).catch(function(){});  // 失败静默,壳照常在线运行
+  });
+})();
+</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<!-- SunCalc:纯本地天文计算(~3KB,零网络)。主链 cdnjs;备链 https://unpkg.com/suncalc@1.9.0/suncalc.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
+<script src="trip.data.js"></script>
+<style>
+:root{
+  --green:#03543C; --green-d:#063D2D; --blue:#0D5EAF; --route:#C8402F;
+  --paper:#F2F4F0; --card:#FFFFFF; --ink:#172019; --mut:#5B6A60; --line:#DCE3DC;
+  --lat:"Archivo",-apple-system,sans-serif;
+  --cjk:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{height:100%;background:#dfe7e0}
+body{height:100%;font-family:var(--cjk);font-size:14px;line-height:1.6;color:var(--ink);background:var(--paper)}
+a{color:var(--blue)}
+
+#map{position:fixed;inset:0;background:#dfe7e0;z-index:0}
+#gframe{position:fixed;inset:0;border:0;width:100%;height:100%;display:none;z-index:1}
+
+/* 地图模式切换 */
+#modebar{position:fixed;top:12px;right:12px;z-index:1200;display:flex;gap:0;border-radius:10px;overflow:hidden;
+  box-shadow:0 4px 16px rgba(10,30,20,.3);border:1px solid #c6d0c6}
+#modebar button{border:0;padding:8px 14px;font:700 13px var(--cjk);cursor:pointer;background:#fff;color:var(--mut)}
+#modebar button.on{background:var(--green);color:#fff}
+#gback{position:fixed;top:56px;right:12px;z-index:1200;display:none;border:0;border-radius:9px;padding:7px 12px;
+  font:600 12.5px var(--cjk);cursor:pointer;background:#fff;color:var(--blue);box-shadow:0 4px 16px rgba(10,30,20,.25)}
+
+/* 太阳时间滑杆(底部浮层,☀️ 开启时显示) */
+#sunbar{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;bottom:max(14px,env(safe-area-inset-bottom));z-index:1200;display:none;width:min(420px,calc(100vw - 24px));
+  background:rgba(247,250,246,.95);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid rgba(180,196,182,.8);border-radius:14px;padding:9px 14px 8px;box-shadow:0 8px 28px rgba(8,28,18,.3)}
+#sunbar.on{display:block}
+#sun-read{display:flex;align-items:baseline;gap:10px;font-size:12px;color:var(--mut);margin-bottom:5px}
+#sun-read b{font:800 16px var(--lat);color:var(--ink)}
+#sun-read.below b,#sun-read.below span{color:#9aa6a0}
+#sun-anchor{display:inline-flex;align-items:center;gap:2px;max-width:45%}
+#sun-anchor:empty{display:none}
+#sun-anchor .nm{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#sun-anchor button{border:0;background:none;padding:0 3px;cursor:pointer;font-size:12px;line-height:1;color:var(--mut)}
+#sun-slider{width:100%;accent-color:#D97706;cursor:pointer;margin:0}
+#sun-scale{display:flex;justify-content:space-between;font:700 10px var(--lat);color:var(--mut);margin-top:2px;opacity:.8}
+.tl .sun-b{font-size:12px;margin-left:4px;vertical-align:1px}
+
+/* 天气来源徽标(日视图 .dmeta 内) */
+.wxslot.wx-clim{cursor:help}
+.wx-bd{display:inline-block;margin-left:5px;padding:0 5px;border-radius:5px;font:700 10px var(--cjk);vertical-align:1px}
+.wx-bd-fc{background:#E6EEF8;color:#0D5EAF}                /* 预报=蓝(确定性) */
+.wx-bd-clim{background:#FBEAD6;color:#A15A12;cursor:help}  /* 近10年同日=琥珀(概率,可点开看区间) */
+.wx-bd-hw{background:#ECEFEC;color:#7B8881;font-weight:600}/* 手写均值=灰 */
+
+/* 悬浮面板 */
+#panel{position:fixed;top:12px;left:12px;bottom:12px;width:404px;max-width:calc(100vw - 24px);z-index:1100;
+  display:flex;flex-direction:column;border-radius:16px;overflow:hidden;
+  background:rgba(247,250,246,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border:1px solid rgba(180,196,182,.7);box-shadow:0 12px 44px rgba(8,28,18,.30)}
+#dhandle{display:none}   /* P4.2 抽屉手柄:仅 ≤720px 显示 */
+#phead{background:var(--green);color:#fff;padding:13px 16px 11px;position:relative;flex:0 0 auto}
+#phead h1{font-family:var(--lat);font-weight:900;font-size:21px;letter-spacing:.4px;font-stretch:78%;display:inline}
+#phead .range{font-size:12px;opacity:.92;margin-top:3px}
+#phead .fl{display:none;gap:6px;flex-wrap:wrap;margin-top:7px;font-size:11.5px}
+#phead .fl span{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.3);border-radius:5px;padding:2px 7px}
+#fold{position:absolute;top:10px;right:10px;border:0;background:rgba(255,255,255,.15);color:#fff;border-radius:7px;
+  width:26px;height:26px;cursor:pointer;font-size:13px;line-height:1}
+#tabs{display:flex;gap:4px;padding:8px 10px 0;flex:0 0 auto}
+#tabs button{flex:1;border:0;background:transparent;color:var(--mut);font:700 13px var(--cjk);padding:7px 4px;
+  border-radius:9px;cursor:pointer}
+#tabs button.on{background:#fff;color:var(--green);box-shadow:0 1px 5px rgba(10,30,20,.12)}
+#chips{display:flex;gap:5px;overflow-x:auto;padding:8px 10px;scrollbar-width:none;flex:0 0 auto}
+#chips::-webkit-scrollbar{display:none}
+#chips button{flex:0 0 auto;border:1.5px solid var(--green);background:#fff;color:var(--green);border-radius:99px;
+  padding:4px 11px;font:800 12px var(--lat);cursor:pointer;white-space:nowrap}
+#chips button small{font-weight:600;opacity:.7;margin-left:3px;font-size:10px}
+#chips button.on{background:var(--green);color:#fff}
+/* P10.2 移动端合并导航:单条横滚 = 总览+D1..Dn(天)+清单/须知/网址(功能 tab)。桌面隐藏,沿用 #tabs+#chips 两行 */
+#mnav{display:none;gap:5px;overflow-x:auto;padding:8px 10px;scrollbar-width:none;flex:0 0 auto}
+#mnav::-webkit-scrollbar{display:none}
+#mnav button{flex:0 0 auto;border:1.5px solid var(--green);background:#fff;color:var(--green);border-radius:99px;
+  padding:9px 14px;min-height:44px;font:800 12px var(--lat);cursor:pointer;white-space:nowrap}
+#mnav button small{font-weight:600;opacity:.7;margin-left:3px;font-size:10px}
+#mnav button.on{background:var(--green);color:#fff}
+#mnav .tabchip{font-family:var(--cjk);border-color:var(--mut);color:var(--mut)}
+#mnav .tabchip.on{background:var(--green);border-color:var(--green);color:#fff}
+#content{flex:1 1 auto;overflow-y:auto;padding:2px 12px 12px;overscroll-behavior:contain}
+#pfoot{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--mut);background:rgba(255,255,255,.6)}
+#pfoot button{border:0;background:none;color:var(--blue);font:600 12px var(--cjk);cursor:pointer;padding:0}
+#pfoot button:disabled{opacity:.5;cursor:progress}
+#pfoot .hint{margin-left:auto;font-size:11px;opacity:.75}
+#pfoot #offHint{margin-left:auto}
+#pfoot #srcHint{margin-left:0}
+.omap-label{white-space:nowrap;color:#234034;background:rgba(247,250,246,.78);border:1px solid rgba(90,112,96,.25);
+  border-radius:4px;padding:1px 4px;font:700 10px var(--cjk);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.omap-label.stay{color:#0D5EAF;border-color:rgba(13,94,175,.35)}
+/* P10.3 动作单 ☰ + 底部命令面板(移动端取代常驻 #pfoot)。桌面 ☰ 隐藏,仍用 #pfoot */
+#actbtn{display:none;flex:0 0 auto;margin-left:auto;border:0;background:rgba(255,255,255,.16);color:#fff;
+  border-radius:9px;width:44px;height:44px;font-size:18px;line-height:1;cursor:pointer}
+#actbackdrop{position:fixed;inset:0;z-index:1200;background:rgba(8,20,14,.34)}
+#actionsheet{position:fixed;left:50%;transform:translateX(-50%);z-index:1260;
+  bottom:max(12px,env(safe-area-inset-bottom));width:min(420px,calc(100vw - 24px));max-height:80vh;overflow-y:auto;
+  background:rgba(247,250,246,.98);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border:1px solid rgba(180,196,182,.8);border-radius:16px;box-shadow:0 12px 44px rgba(8,28,18,.4);padding:12px 12px 14px}
+#actionsheet[hidden],#actbackdrop[hidden]{display:none}
+#actionsheet h4{font-size:13px;color:var(--green);margin:2px 4px 9px}
+#actionsheet .asgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+#actionsheet .asb{display:flex;align-items:center;justify-content:center;gap:5px;min-height:48px;border:1px solid var(--line);
+  background:#fff;border-radius:11px;padding:8px;font:600 13px var(--cjk);color:var(--ink);cursor:pointer;text-align:center}
+#actionsheet .asb:active{background:var(--paper)}
+#actionsheet .asb.pri{border-color:var(--green);color:var(--green)}
+#actionsheet .asb.full{grid-column:1 / -1}
+#actionsheet .asstat{margin:10px 4px 0;font-size:11.5px;color:var(--mut);line-height:1.6}
+#actionsheet .asstat .draft-badge{color:#C8402F;font-weight:800}
+#actionsheet .asstat .dft-x{border:1px solid var(--mut);background:#fff;color:var(--mut);border-radius:6px;
+  padding:1px 7px;font-size:11px;cursor:pointer;margin-left:4px}
+#panel.min{bottom:auto}
+#panel.min #tabs,#panel.min #chips,#panel.min #content,#panel.min #pfoot{display:none}
+
+/* 日卡（总览） */
+.dcard{position:relative;display:flex;gap:10px;align-items:flex-start;background:#fff;border:1px solid var(--line);border-radius:12px;
+  padding:10px 12px;margin-top:8px;cursor:pointer}
+.dcard:hover{border-color:#b9c8ba}
+.dcard .dn{flex:0 0 auto;font:900 13px var(--lat);color:#fff;border-radius:8px;padding:3px 8px;margin-top:1px}
+.dcard b{font-size:13.5px}
+.ovbox{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:12.5px;color:#374440}
+.ovbox b{color:var(--ink)}
+.ovbox details.ovbudget{margin-top:6px}
+.ovbox details.ovbudget summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--ink)}
+.ovbox details.ovbudget>div{margin-top:4px;line-height:1.5}
+.ovbox details.ovbudget .ovfx{color:var(--mut);font-size:11.5px}
+/* P16 日况(Day Brief)三联:天气·日出日落·驾驶里程时间。总览卡 + 日视图头共用 */
+.daybrief{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font:600 11.5px var(--lat);color:var(--mut)}
+.daybrief .db-c{display:inline-flex;align-items:center;white-space:nowrap}
+.daybrief .db-drv button{border:0;background:none;color:var(--blue);cursor:pointer;font-size:13px;padding:0 2px;margin-left:2px;line-height:1}
+.droute{margin-top:8px;font-size:12.5px;color:var(--ink);line-height:1.5}
+/* 日视图 */
+.tl{list-style:none;margin-top:6px}
+.tl li{display:grid;grid-template-columns:42px 26px 1fr;gap:7px;position:relative;padding:7px 4px 9px;border-radius:10px}
+.tl li::before{content:"";position:absolute;left:61px;top:30px;bottom:-3px;border-left:2px dotted var(--line)}
+.tl li:last-child::before{display:none}
+.tl li.pt{cursor:pointer}
+.tl li.pt:hover{background:rgba(255,255,255,.85)}
+.tl li.act{background:#fff;box-shadow:0 1px 6px rgba(10,30,20,.12)}
+.tl .t{font:800 12px var(--lat);color:var(--green);padding-top:3px;font-stretch:85%}
+.tl .dot{width:21px;height:21px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;
+  justify-content:center;font:800 11px var(--lat);border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3);margin-top:1px}
+.tl .dot.stay{background:var(--blue)}
+.tl .emo{font-size:15px;text-align:center;padding-top:1px}
+.tl .w{font-weight:600;font-size:13px}
+.tl .n{color:var(--mut);font-size:12px;margin-top:1px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;cursor:pointer}
+.tl .n.exp{-webkit-line-clamp:unset;overflow:visible}
+.tl .n a{font-size:11.5px}
+.tl .lk{display:inline-block;font-size:11px;font-weight:700;text-decoration:none;border:1px solid var(--blue);
+  border-radius:6px;padding:0 6px;margin-left:5px;vertical-align:1px}
+.staycard{margin-top:6px;border:1.5px dashed var(--blue);border-radius:11px;padding:9px 12px;background:#F4F9FF;
+  position:relative;display:flex;gap:9px;cursor:pointer}
+.staycard .ic{font-size:16px}
+.staycard b{font-size:13px}
+.staycard .p{font:800 13px var(--lat);color:var(--blue);margin-left:4px}
+.staycard .sn{color:#A04020;font-size:11.5px;margin-top:2px}
+.dbtns{display:flex;gap:7px;margin-top:9px}
+.dbtns a,.dbtns button{flex:1;text-align:center;text-decoration:none;border:1.5px solid var(--blue);color:var(--blue);
+  background:#fff;border-radius:9px;padding:6px 4px;font:600 12px var(--cjk);cursor:pointer}
+
+/* 编辑模式(P3):行内控件 / 插入行 / chip 红点 / 草稿徽标 / 底部条目表单 */
+#edt.on{background:var(--green);color:#fff!important;border-radius:7px;padding:2px 8px}
+/* P17 行内操作:默认隐藏;桌面非编辑态悬停浮现右上 pill(hover actions);编辑态(两端)内联常驻 */
+.ectl{display:none;gap:1px;margin-left:6px;vertical-align:1px}
+#content.editing .ectl{display:inline-flex}
+@media (hover:hover){#content:not(.editing) .tl li:hover .ectl,#content:not(.editing) .staycard:hover .ectl{display:inline-flex;position:absolute;top:5px;right:7px;z-index:3;margin:0;background:rgba(247,250,246,.96);border:1px solid var(--line);border-radius:8px;padding:1px;box-shadow:0 1px 5px rgba(8,28,18,.16)}}
+.ectl button{border:0;background:none;cursor:pointer;font-size:12px;line-height:1;padding:1px 3px;border-radius:5px;color:var(--mut)}
+.ectl button:hover{background:var(--paper);color:var(--ink)}
+.ectl button:disabled{opacity:.25;cursor:default}
+.tl li.ins{display:block;padding:0 4px}
+.tl li.ins::before{display:none}
+.insb{display:block;width:100%;border:1.5px dashed #b9c8ba;background:none;color:var(--mut);border-radius:9px;
+  padding:2px 4px;font:600 11px var(--cjk);cursor:pointer;margin:3px 0}
+.insb:hover{color:var(--green);border-color:var(--green)}
+.chip-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#C8402F;margin-left:4px;vertical-align:6px}
+.draft-badge{color:#C8402F;font-weight:800}
+#eform{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:1250;width:min(280px,calc(100vw - 24px));
+  max-height:72vh;overflow-y:auto;display:none;background:rgba(247,250,246,.97);backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);border:1px solid rgba(180,196,182,.8);border-radius:14px;
+  box-shadow:0 12px 44px rgba(8,28,18,.35);padding:12px 14px}
+#eform.on{display:block}
+#eform h3{font-size:13.5px;color:var(--green);margin-bottom:2px}
+#eform .fr{display:flex;gap:6px;margin-top:6px}
+#eform input{flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;padding:5px 9px;font:13px var(--cjk);background:#fff}
+#eform input:focus{outline:none;border-color:var(--green)}
+.efb{flex:1;border:1.5px solid var(--blue);color:var(--blue);background:#fff;border-radius:9px;padding:5px 8px;
+  font:600 12px var(--cjk);cursor:pointer;white-space:nowrap}
+.efb.pri{background:var(--green);border-color:var(--green);color:#fff}
+.efb.efdel{flex:0 0 auto;border-color:#C8402F;color:#C8402F}   /* P10.3 表单内删除(双击编辑无需进编辑模式) */
+.efb:disabled{opacity:.4;cursor:default}
+/* emoji 快选 chip,不参与 .fr flex,独立换行行 */
+.efec{border:1px solid var(--line);color:var(--ink);background:#fff;border-radius:7px;
+  padding:2px 6px;font-size:14px;cursor:pointer;line-height:1;min-height:28px;
+  display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+.efec:hover{border-color:var(--blue)}
+#ef-pick{flex:0 0 auto}
+#ef-res{display:none;margin-top:6px;background:#fff;border:1px solid var(--line);border-radius:10px;max-height:180px;overflow-y:auto}
+.efr{padding:6px 10px;cursor:pointer;border-bottom:1px dashed var(--line);font-size:12.5px}
+.efr:last-child{border-bottom:0}
+.efr:hover{background:var(--paper)}
+.efr .eft{float:right;font:700 10px var(--lat);color:#A15A12;background:#FBEAD6;border-radius:5px;padding:0 5px;margin-left:6px}
+.efr .efl{color:var(--mut);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ef-deg{display:none;font-size:11.5px;color:var(--mut);margin-top:4px}
+#ef-err{color:#C8402F;font-size:11.5px;margin-top:5px;font-weight:600}
+
+/* 固化中心(P3.6):底部弹层,复用 #eform 几何 */
+#cform{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:1250;width:min(560px,calc(100vw - 24px));
+  max-height:78vh;overflow-y:auto;display:none;background:rgba(247,250,246,.97);backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);border:1px solid rgba(180,196,182,.8);border-radius:14px;
+  box-shadow:0 12px 44px rgba(8,28,18,.35);padding:12px 14px}
+#cform.on{display:block}
+#cform h3{font-size:13.5px;color:var(--green);margin-bottom:4px}
+#cform .cint{font-size:11.5px;color:var(--mut);line-height:1.5;margin-bottom:6px}
+#cform .fr{display:flex;gap:6px;margin-top:8px}
+.csec{margin-top:10px;border-top:1px solid var(--line);padding-top:7px}
+.csec>.ch{display:flex;align-items:center;gap:7px;font:700 12px var(--cjk);color:var(--ink);cursor:pointer}
+.csec>.ch input{width:14px;height:14px;flex:0 0 auto}
+.csec>.ch .cn{margin-left:auto;font:600 10px var(--cjk);color:var(--mut)}
+.crow{display:flex;align-items:flex-start;gap:7px;padding:3px 0 3px 21px;font-size:11.5px;line-height:1.45}
+.crow input{width:13px;height:13px;flex:0 0 auto;margin-top:2px}
+.crow input:disabled+.cl{opacity:.4}
+.crow .cl{flex:1;min-width:0}
+.crow .ck-id{font:700 11px var(--cjk);color:var(--green)}
+.crow .cv-old{color:var(--mut)}
+.crow .cv-new{color:var(--ink);font-weight:600}
+.crow .cv-arr{color:var(--blue);margin:0 3px}
+#cempty{font-size:12px;color:var(--mut);padding:8px 0}
+
+/* 清单 / 须知 / 网址 */
+.ck{list-style:none;margin-top:6px}
+.ck li{display:flex;gap:9px;padding:9px 4px;border-bottom:1px dashed var(--line);align-items:flex-start}
+.ck input{width:17px;height:17px;margin-top:2px;accent-color:var(--green);flex:0 0 auto;cursor:pointer}
+.ck b{font-size:13px;font-weight:600}
+.ck li.done b{text-decoration:line-through;color:var(--mut)}
+.ck .cn{color:var(--mut);font-size:12px;margin-top:1px}
+.nt{list-style:none;margin-top:6px}
+.nt li{padding:6px 0 6px 18px;position:relative;color:#374440;font-size:12.5px;border-bottom:1px dashed var(--line)}
+.nt li::before{content:"›";position:absolute;left:4px;color:var(--route);font-weight:900}
+.lkg h3{font-size:13px;margin:14px 2px 4px;color:var(--ink)}
+.lkg .li{background:#fff;border:1px solid var(--line);border-radius:10px;padding:7px 11px;margin-top:5px;font-size:12.5px}
+.lkg .li a{font-weight:600;text-decoration:none}
+.lkg .li .n{color:var(--mut);font-size:11.5px;margin-top:1px}
+
+/* 行程切换下拉 */
+#t-row{display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;-webkit-user-select:none;padding-right:30px}
+#t-row .caret{font-size:11px;opacity:.85;transition:transform .15s;flex:0 0 auto}
+#t-row.open .caret{transform:rotate(180deg)}
+#tripdd{position:absolute;z-index:80;left:10px;right:10px;display:none;background:#fff;border:1px solid var(--line);
+  border-radius:12px;box-shadow:0 10px 30px rgba(8,28,18,.28);overflow:hidden;padding:4px}
+#tripdd.open{display:block}
+#tripdd .ddi{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:8px;font-size:13px;color:var(--ink);cursor:pointer}
+#tripdd .ddi:hover{background:var(--paper)}
+#tripdd .ddi .ck{width:14px;flex:0 0 auto;color:var(--green);font-weight:900;text-align:center}
+#tripdd .ddi.on{font-weight:700;color:var(--green)}
+#tripdd .ddi.dis{color:var(--mut);cursor:default;opacity:.75}
+#tripdd .ddi.dis:hover{background:none}
+
+/* lint 体检 */
+.tbadge{display:inline-block;min-width:15px;padding:0 4px;margin-left:4px;border-radius:99px;background:#D97706;color:#fff;
+  font:800 10px var(--lat);line-height:15px;vertical-align:2px;text-align:center}
+.lintbar{margin-top:8px;background:#FFF7E0;border:1px solid #E8C76E;border-radius:10px;padding:8px 12px;font-size:12.5px;
+  color:#7A5800;font-weight:700;cursor:pointer}
+.lintbar .arr{float:right;font-weight:400}
+.lintlist{list-style:none;margin-top:4px;background:#FFFBEF;border:1px dashed #E8C76E;border-radius:10px;padding:6px 12px;display:none}
+.lintlist.open{display:block}
+.lintlist li{padding:5px 0 5px 17px;position:relative;font-size:12px;color:#6B5616;border-bottom:1px dashed #EFDFAE;line-height:1.5}
+.lintlist li:last-child{border-bottom:0}
+.lintlist li::before{content:"⚠";position:absolute;left:0;top:6px;font-size:10px}
+
+.badge{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;bottom:max(18px,env(safe-area-inset-bottom));z-index:1300;background:#063D2D;color:#fff;
+  padding:8px 16px;border-radius:99px;font-size:12.5px;box-shadow:0 6px 20px rgba(0,0,0,.3);display:none}
+#err{position:fixed;inset:0;z-index:2000;background:rgba(242,244,240,.97);display:none;align-items:center;justify-content:center;text-align:center;padding:30px}
+
+.leaflet-popup-content{font-family:var(--cjk);font-size:12.5px;margin:8px 12px}
+.leaflet-popup-content b{font-size:13px}
+
+/* P4.6 行中模式:时间轴「— 现在 HH:MM —」分隔线 */
+.tl li.tlnow{display:block;padding:1px 4px}
+.tl li.tlnow::before{display:none}
+.tl li.tlnow .nl{display:flex;align-items:center;gap:8px;color:var(--route);font:800 10.5px var(--lat);
+  letter-spacing:.5px;white-space:nowrap}
+.tl li.tlnow .nl::before,.tl li.tlnow .nl::after{content:"";flex:1;border-top:1.5px solid var(--route);opacity:.55}
+
+/* P4.6 定位蓝点按钮(Leaflet 控件,HTTPS/localhost 才挂载) */
+.locctl a{font-size:19px;font-weight:700;color:#5B6A60;text-decoration:none}
+.locctl a.on{color:#0D5EAF;background:#E6EEF8}
+
+/* P4.2/4.3 三态底部抽屉(peek 88px / half 50vh / full 92vh)+ 全面屏与触控适配。桌面(>720px)完全不受影响 */
+@media (max-width:720px){
+  #panel{top:auto;left:0;right:0;bottom:0;width:auto;max-width:none;max-height:none;
+    height:92vh;height:92dvh;border-radius:18px 18px 0 0;
+    transform:translateY(calc(100% - 88px));transition:transform .26s cubic-bezier(.22,.9,.34,1);will-change:transform}
+  #panel.drag{transition:none}
+  #panel.dw-pk{transform:translateY(calc(100% - 88px))}
+  #panel.dw-hf{transform:translateY(calc(100% - 50vh));transform:translateY(calc(100% - 50dvh))}
+  #panel.dw-fl{transform:translateY(0)}
+  /* 评审修复:面板恒 92dvh 只平移,half/peek 态 #content 盒子底部被移出视口(half 约 42dvh),
+     滚到 scrollTop 最大仍看不到最后一屏——按档位补 padding-bottom=被移出高度(--dwgap,dwApply 写入) */
+  #content{padding-bottom:calc(12px + var(--dwgap,0px))}
+  /* 抽屉态下作废桌面 .min 折叠(#fold 已隐藏,防残留 class 藏掉内容) */
+  #panel.min{bottom:0}
+  #panel.min #tabs{display:flex}#panel.min #chips{display:flex}
+  #panel.min #content{display:block}#panel.min #pfoot{display:flex}
+  #fold{display:none}
+  #dhandle{display:block;flex:0 0 auto;padding:8px 0 5px;cursor:grab;touch-action:none;
+    -webkit-user-select:none;user-select:none;background:var(--green)}
+  #dhandle span{display:block;width:44px;height:5px;border-radius:3px;background:rgba(255,255,255,.55);margin:0 auto}
+  /* A2:整块头部当拖拽面——禁默认触控手势(防 iOS 橡皮筋)与长按选择 */
+  /* P10.1 头部压到一行:标题+日期范围同行(标题超长省略),航班下放到总览/D1/末日,☰ 在最右(P10.3) */
+  #phead{touch-action:none;-webkit-user-select:none;user-select:none;
+    display:flex;align-items:center;gap:8px;padding:4px 14px}
+  #t-row{flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:3px}
+  #phead h1{font-size:18px;font-stretch:80%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #phead .range{margin-top:0;flex:1 1 auto;min-width:0;font-size:11px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.88}
+  #phead .fl{display:none}
+  /* P10.2 合并导航:移动端隐藏两行 #tabs/#chips(含 .min 覆盖,故 !important),改用单行 #mnav */
+  #tabs,#chips{display:none!important}
+  #mnav{display:flex}
+  #panel.min #mnav{display:flex}
+  /* P10.3 动作单取代常驻底栏:☰ 现身,#pfoot 收起(其内 #offHint/#srcHint 仍在 DOM 供脚本读写) */
+  #actbtn{display:flex;align-items:center;justify-content:center}
+  #pfoot{display:none!important}
+  #modebar{top:max(8px,env(safe-area-inset-top));right:8px}
+  #gback{top:max(50px,calc(env(safe-area-inset-top) + 42px))}
+  #sunbar{bottom:auto;top:92px;top:max(92px,calc(env(safe-area-inset-top) + 84px))}
+  /* 4.3 触控目标 ≥44px(仅移动端,不动桌面观感) */
+  #modebar button{padding:13px 14px;min-height:44px}
+  #tabs button{padding:12px 4px;min-height:44px}
+  #chips button{padding:9px 14px;min-height:44px}
+  #pfoot{flex-wrap:wrap;gap:0 6px;padding:2px 12px;padding-bottom:max(2px,env(safe-area-inset-bottom))}
+  #pfoot button{padding:12px 4px;min-height:44px}
+  #pfoot .hint{min-width:0}   /* 放不下时整行换行,草稿徽标/弃草稿按钮永不被裁掉 */
+  #tripdd .ddi{padding:13px 11px}
+  .ck li{padding:12px 4px}
+  .ck input{width:20px;height:20px}
+  .lintbar{padding:12px}
+  .dbtns a,.dbtns button{padding:12px 4px;min-height:44px}
+  .efb{padding:11px 8px;min-height:44px}
+  .efec{min-height:36px;padding:4px 8px}
+  .ectl button{padding:8px 7px;font-size:15px;min-height:40px}
+  .insb{padding:8px 4px;min-height:44px}
+  .leaflet-bar a,.leaflet-touch .leaflet-bar a{width:44px;height:44px;line-height:44px}
+  /* 4.3 输入框 ≥16px 防 iOS 聚焦自动缩放 */
+  #eform input{font-size:16px}
+  /* ⌖ 字形偏小,单独放大与 .locctl a 对齐 */
+  #mb-loc{font-size:19px}
+  /* OSM/CARTO 署名移左上后缩小,不可隐藏 */
+  .leaflet-control-attribution{font-size:9px!important;background:rgba(255,255,255,.65)!important}
+}
+/* P13 桌面外壳:左下常驻底栏 #pfoot 收进头部右上汉堡 ☰(复用移动端动作单);#fold 左移让位,标题留出右侧空间 */
+@media (min-width:721px){
+  #actbtn{display:flex;align-items:center;justify-content:center;position:absolute;top:9px;right:10px;
+    width:30px;height:30px;font-size:16px;margin-left:0}
+  #fold{right:46px}
+  #t-row{padding-right:64px}
+  #pfoot{display:none}
+}
+@media print{
+  #map,#gframe,#modebar,#gback,#pfoot,#fold,#sunbar{display:none!important}
+  #eform,#cform,.ectl,.tl li.ins,.insb,.chip-dot{display:none!important}
+  #actbtn,#actionsheet,#actbackdrop{display:none!important}   /* P10.3 动作单不进纸面 */
+  #dhandle,.locctl,#warmup,.tl li.tlnow{display:none!important}   /* P4:抽屉手柄/定位/⚡预热/「现在」线不进纸面 */
+  #panel{position:static;width:auto;max-width:none;box-shadow:none;background:#fff}
+  #content{overflow:visible}
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<iframe id="gframe" allow="fullscreen" referrerpolicy="no-referrer-when-downgrade"></iframe>
+<div id="modebar">
+  <button id="mb-osm" class="on">标点图</button>
+  <button id="mb-g">Google</button>
+  <button id="mb-sun" title="太阳方位 / 黄金时刻">☀️</button>
+</div>
+<button id="gback">↩ 本日整条路线</button>
+<div id="sunbar">
+  <div id="sun-read"><b id="sun-t">12:00</b><span id="sun-alt">高度角 —</span><span id="sun-az">方位 —</span><span id="sun-anchor"></span></div>
+  <input type="range" id="sun-slider" min="240" max="1380" step="5" value="720">
+  <div id="sun-scale"><span>04</span><span>09</span><span>14</span><span>19</span><span>23</span></div>
+</div>
+
+<aside id="panel">
+  <div id="dhandle" title="拖动调整面板高度;点按切换档位"><span></span></div>
+  <div id="phead">
+    <div id="t-row" title="切换行程"><h1 id="t-title"></h1><span class="caret">▾</span></div>
+    <button id="fold" title="收起/展开">▾</button>
+    <div class="range" id="t-range"></div>
+    <div class="fl"><span id="t-in"></span><span id="t-out"></span></div>
+    <button id="actbtn" title="更多操作">☰</button>
+  </div>
+  <div id="tripdd"></div>
+  <div id="tabs">
+    <button data-tab="trip" class="on">行程</button>
+    <button data-tab="ck">清单</button>
+    <button data-tab="nt">须知</button>
+    <button data-tab="lk">网址</button>
+  </div>
+  <nav id="chips"></nav>
+  <nav id="mnav"></nav>
+  <div id="content"></div>
+  <div id="pfoot">
+    <button id="edt">✏️ 编辑</button>
+    <button id="cons">📌 固化</button>
+    <button id="exp">⬇ 导出 .md</button>
+    <button id="imp">⬆ 导入 .md</button>
+    <button id="warmup" title="出发前一晚点一次:把全程算路与天气落本地缓存,离线可读">⚡ 预热</button>
+    <button id="omap" hidden title="下载/显示/隐藏 10km 走廊离线地图">🗺 地图</button>
+    <button id="omapclear" hidden title="清除已下载的离线地图">✕地图</button>
+    <button id="fsave" hidden>💾 存回文件</button>
+    <button id="rsave" hidden>☁ 存回仓库</button>
+    <span class="hint" id="offHint"></span>
+    <span class="hint" id="srcHint">数据：trip.data.js（首尾两行勿动）</span>
+  </div>
+</aside>
+
+<input type="file" id="mdfile" accept=".md,.markdown,.txt,.js" hidden>
+<div class="badge" id="badge"></div>
+<div id="eform">
+  <h3 id="ef-title"></h3>
+  <div class="fr"><input id="ef-q" placeholder="🔍 搜地点（英文逐键 / 中文按回车 / 粘贴坐标）" autocomplete="off"></div>
+  <div id="ef-res"></div>
+  <div id="ef-deg"></div>
+  <div id="ef-row-echips" style="display:none;flex-wrap:nowrap;gap:4px;margin-top:4px;overflow-x:auto;scrollbar-width:none"></div>
+  <div class="fr" id="ef-row-te">
+    <input id="ef-t" placeholder="时间 HH:MM" style="flex:0 0 110px">
+    <input id="ef-e" placeholder="emoji（如 🏰，留空=📍）">
+  </div>
+  <div class="fr"><input id="ef-w" placeholder="标题"></div>
+  <div id="ef-restore-row" style="display:none;margin-top:2px"></div>
+  <div class="fr" id="ef-row-p"><input id="ef-p" placeholder="价格（如 £180/夜）"></div>
+  <div class="fr"><input id="ef-note" placeholder="备注（段内可用「；」分隔）"></div>
+  <div class="fr" id="ef-row-url"><input id="ef-url" placeholder="URL（http(s)://…）"></div>
+  <div class="fr">
+    <input id="ef-ll" placeholder="坐标 lat, lng（如 57.41288, -6.19418）">
+    <button id="ef-pick" type="button" class="efb" title="点地图取点">📍</button>
+  </div>
+  <div id="ef-err"></div>
+  <div class="fr" id="ef-mv">
+    <button id="ef-prev" type="button" class="efb" title="移到前一天末">←</button>
+    <button id="ef-next" type="button" class="efb" title="移到后一天初">→</button>
+  </div>
+  <div class="fr">
+    <button id="ef-del" type="button" class="efb efdel" title="删除">🗑</button>
+    <button id="ef-save" type="button" class="efb pri" title="保存">💾</button>
+    <button id="ef-cancel" type="button" class="efb" title="取消">✕</button>
+  </div>
+</div>
+<div id="actbackdrop" hidden></div>
+<div id="actionsheet" hidden></div>
+<div id="cform">
+  <h3>📌 固化自动值进 MD</h3>
+  <p class="cint">把当前算出的自动值写回 MD 文本，离线/单独打开也信息完整。勾选要固化的项，未取到自动值的项不可勾。</p>
+  <div id="cbody"></div>
+  <div id="cempty"></div>
+  <div class="fr">
+    <button id="cf-save" type="button" class="efb pri">📌 固化所选</button>
+    <button id="cf-cancel" type="button" class="efb" title="取消">✕</button>
+  </div>
+</div>
+<div id="err"><div>
+  <h2 style="margin-bottom:8px">没找到行程数据</h2>
+  <p style="color:#5B6A60">请确认 trip.data.js 与本页面在同一文件夹，<br>或 <button onclick="document.getElementById('mdfile').click()" style="color:#0D5EAF;border:0;background:none;font-size:14px;cursor:pointer;text-decoration:underline">手动选择一个 .md / trip.data.js 文件</button></p>
+</div></div>
+
+<script>
+/*PARSER-START*/
+function parseTrip(md){
+  /* topComment=首个 HTML 注释块原文(含定界符);secTitles=三功能区块标题原文;
+     metaExtra/d.extra=未识别 - 行原文 —— 全部供 serializeTrip 原样发回,保证 round-trip 不丢内容 */
+  const T={meta:{title:""},days:[],checklist:[],notes:[],linkGroups:[],warnings:[],
+           topComment:"",secTitles:{ck:"",nt:"",lk:""},metaExtra:[]};
+  const SEP=/\s*[｜|]\s*/;
+  const COORD=/\s*@(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/;
+  const dayMetaMap={"路线":"route","驾驶":"drive","日出日落":"sun","天气":"wx"};
+  const metaMap={"副标":"sub","日期":"range","去程":"inFlight","回程":"outFlight","汇率":"fx","预算":"budget","更新":"updated","时区":"tz"};
+  // 查表必须限自有键:裸对象 metaMap["constructor"] 等会命中原型链(truthy)→ 垃圾 meta 键 + 整行丢失,破坏 round-trip
+  const own=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
+  let cur=null, mode="meta", group=null, inComment=false, cBuf=null;
+  for(let raw of md.split(/\r?\n/)){
+    let line=raw.trim();
+    if(inComment){
+      if(cBuf)cBuf.push(raw);
+      if(line.includes("-->")){ inComment=false; if(cBuf){T.topComment=cBuf.join("\n");cBuf=null;} }
+      continue;
+    }
+    if(line.startsWith("<!--")){
+      if(!line.includes("-->")){ inComment=true; if(!T.topComment)cBuf=[raw]; }
+      else if(!T.topComment)T.topComment=raw;
+      continue;
+    }
+    if(!line) continue;
+    if(line.startsWith("# ")&&!T.meta.title){T.meta.title=line.slice(2).trim();mode="meta";continue;}
+    if(line.startsWith("## ")){
+      const parts=line.slice(3).trim().split(SEP);
+      const head=(parts[0]||"").trim();
+      if(/^D\d+$/.test(head)){
+        const dw=(parts[1]||"").trim().split(/\s+/);
+        cur={id:head,date:dw[0]||"",week:dw[1]||"",title:(parts[2]||"").trim(),
+             route:"",drive:"",sun:"",wx:"",items:[],stay:null,extra:[]};
+        T.days.push(cur); mode="day";
+      }else if(head.includes("订")||head.includes("清单")||head.includes("✅")){mode="ck";T.secTitles.ck=line.slice(3).trim();}
+      else if(head.includes("须知")||head.includes("⚠")){mode="nt";T.secTitles.nt=line.slice(3).trim();}
+      else if(head.includes("网址")||head.includes("链接")||head.includes("🔗")){mode="lk";T.secTitles.lk=line.slice(3).trim();}
+      else mode="skip";
+      continue;
+    }
+    if(line.startsWith("### ")){ if(mode==="lk"){group={name:line.slice(4).trim(),items:[]};T.linkGroups.push(group);} continue; }
+    if(!line.startsWith("- ")) continue;
+    let body=line.slice(2).trim();
+    if(mode==="meta"){
+      const m=body.match(/^([^:：]+)[:：]\s*(.*)$/);
+      if(m&&own(metaMap,m[1].trim())) T.meta[metaMap[m[1].trim()]]=m[2].trim();
+      else T.metaExtra.push(line);
+      continue;
+    }
+    if(mode==="day"&&cur){
+      const dm=body.match(/^([^:：]+)[:：]\s*(.*)$/);
+      if(dm&&own(dayMetaMap,dm[1].trim())){cur[dayMetaMap[dm[1].trim()]]=dm[2].trim();continue;}
+      if(/^🏨\s*宿\s*[:：]/.test(body)){
+        let rest=body.replace(/^🏨\s*宿\s*[:：]\s*/,""), lat=null,lng=null;
+        const cm=rest.match(COORD); if(cm){lat=+cm[1];lng=+cm[2];rest=rest.replace(COORD,"");}
+        // 按位取段(与 items 一致,不 filter):否则「h ｜ ｜ note」的空价格段被吃掉,note 漂移成 p
+        const seg=rest.split(SEP).map(s=>s.trim());
+        cur.stay={h:seg[0]||"",p:seg[1]||"",note:seg.slice(2).filter(Boolean).join("；"),lat,lng};
+        continue;
+      }
+      const tm=body.match(/^(\d{1,2}:\d{2})\s+(\S+)\s+(.*)$/);
+      if(tm){
+        let t=tm[1],e=tm[2],rest=tm[3],lat=null,lng=null;
+        const cm=rest.match(COORD); if(cm){lat=+cm[1];lng=+cm[2];rest=rest.replace(COORD,"");}
+        const ferry=/⛴/.test(body);
+        const seg=rest.split(SEP).map(s=>s.trim());
+        const it={t,e,w:seg[0]||"",note:"",url:"",lat,lng,ferry};
+        for(let i=1;i<seg.length;i++){
+          if(!seg[i]) continue;
+          if(/^https?:\/\//.test(seg[i])) it.url=seg[i];
+          else it.note+=(it.note?"；":"")+seg[i];
+        }
+        cur.items.push(it);
+      }else cur.extra.push(line);
+      continue;
+    }
+    if(mode==="ck"){
+      body=body.replace(/^\[[ xX]?\]\s*/,"");
+      const seg=body.split(SEP).map(s=>s.trim());
+      T.checklist.push({t:seg[0]||"",n:seg.slice(1).join("；")});
+      continue;
+    }
+    if(mode==="nt"){T.notes.push(body);continue;}
+    if(mode==="lk"&&group){
+      const lm=body.match(/^\[([^\]]+)\]\(([^)]+)\)\s*(?:[｜|]\s*(.*))?$/);
+      if(lm) group.items.push({t:lm[1],u:lm[2],n:lm[3]||""});
+      continue;
+    }
+  }
+  /* —— v2 增量:年份锚 / dateISO / 周几校验 / lint(纯计算,无 fetch/DOM) —— */
+  const W=T.warnings;
+  // 年份锚(SCHEMA §3):首个 yyyy.mm.dd 形态的四位年。要求 19xx/20xx + 后随月日,避免把「自驾约2300km」的里程当年份
+  const ym=(T.meta.range||"").match(/(?:^|\D)((?:19|20)\d{2})[.\-/年]\s*\d{1,2}[.\-/月]\s*\d{1,2}/);
+  if(ym)T.meta.year=+ym[1]; else if(T.days.length)W.push("meta「日期」缺「yyyy.mm.dd」形式的年份锚,无法推算各天具体日期(dateISO)");
+  const WD=["周日","周一","周二","周三","周四","周五","周六"];
+  let yr=T.meta.year!=null?T.meta.year:null, prevMD=null;
+  for(const d of T.days){
+    d.dateISO=null; d.weekdayCalc="";
+    const dm=(d.date||"").match(/^(\d{1,2})-(\d{1,2})$/);
+    if(!dm){ if(d.date)W.push(d.id+" 日期「"+d.date+"」不是 MM-DD 格式"); continue; }
+    const mm=+dm[1], dd=+dm[2], cur=mm*100+dd;
+    if(yr!=null){
+      if(prevMD!=null&&cur<prevMD)yr+=1;   // 跨年:MM-DD 回退 → 年 +1
+      const dt=new Date(Date.UTC(yr,mm-1,dd));
+      if(dt.getUTCMonth()!==mm-1||dt.getUTCDate()!==dd){   // 防 Date.UTC 溢出规范化(如 07-32→08-01)静默吞掉笔误
+        W.push(d.id+" 日期「"+d.date+"」不存在("+yr+" 年无此月日),已跳过 dateISO/周几推算");
+      }else{
+        d.dateISO=yr+"-"+String(mm).padStart(2,"0")+"-"+String(dd).padStart(2,"0");
+        d.weekdayCalc=WD[dt.getUTCDay()];
+        if(d.week&&d.weekdayCalc&&d.week!==d.weekdayCalc)
+          W.push(d.id+" 周几不符:写作「"+d.week+"」,按 "+d.dateISO+" 应为「"+d.weekdayCalc+"」");
+      }
+    }
+    prevMD=cur;
+  }
+  // Dn 连续性(SCHEMA §6.5):应自 D1 起顺序递增,跳号/重复/逆序均出黄牌
+  let prevN=0;
+  for(const d of T.days){
+    const n=+String(d.id||"").replace(/^D/,"");
+    if(!Number.isInteger(n))continue;
+    if(n!==prevN+1)W.push(d.id+" 编号不连续(上一日 D"+prevN+",应为 D"+(prevN+1)+"):Dn 需自 D1 起顺序递增,勿跳号/重复");
+    prevN=n;
+  }
+  if(!T.meta.tz&&T.days.length)W.push("meta 缺「时区」字段(将按首个坐标自动判定,建议回写 MD 固化)");
+  const noCoord={};let noCoordN=0;
+  for(const d of T.days){
+    let last=-1;
+    for(const it of d.items){
+      const tmm=it.t.match(/^(\d{1,2}):(\d{2})$/);
+      if(tmm){
+        const v=+tmm[1]*60+ +tmm[2];
+        if(v<last)W.push(d.id+" 时间乱序:"+it.t+"「"+it.w+"」早于前一条");
+        else last=v;
+      }
+      if(it.lat==null){noCoord[d.id]=(noCoord[d.id]||0)+1;noCoordN++;}
+    }
+  }
+  if(noCoordN)W.push("条目缺坐标:共 "+noCoordN+" 处("+Object.keys(noCoord).map(k=>k+"×"+noCoord[k]).join("、")+"),不上地图,仅供核对");
+  return T;
+}
+/*PARSER-END*/
+/*SERIALIZER-START*/
+/* serializeTrip(T) → md:parseTrip 的对称序列化(纯函数,无 fetch/DOM)。
+   规范形(canonical):meta 按固定键序、坐标 String(Number) 规范化并统一发到标题段后、
+   note 单段(段内全角「；」)、段间全角「｜」、week 空不补算、派生值(year/dateISO/weekdayCalc/ferry/warnings)一律不发。
+   正确性标尺:parse(serialize(parse(md))) 与 parse(md) 深度全等,且 serialize 幂等(见 tools/roundtrip-test.mjs)。 */
+function serializeTrip(T){
+  const out=[];
+  const meta=T.meta||{};
+  const fmtC=v=>{let s=String(v);if(/e/i.test(s)){s=v.toFixed(6).replace(/\.?0+$/,"");if(s===""||s==="-0"||s==="-")s="0";}return s;};   // 定点输出:|v|<1e-6 的指数记法会被 COORD 正则误读劫持坐标
+  const coord=(lat,lng)=>(lat!=null&&lng!=null)?" @"+fmtC(lat)+","+fmtC(lng):"";
+  if(meta.title)out.push("# "+meta.title);
+  const METAKEYS=[["副标","sub"],["日期","range"],["时区","tz"],["去程","inFlight"],["回程","outFlight"],["汇率","fx"],["预算","budget"],["更新","updated"]];
+  for(const [zh,k] of METAKEYS) if(meta[k]!=null) out.push("- "+zh+": "+meta[k]);
+  for(const l of T.metaExtra||[]) out.push(l);
+  if(T.topComment){ out.push(""); out.push(T.topComment); }
+  for(const d of T.days||[]){
+    out.push("");
+    out.push("## "+d.id+" ｜ "+d.date+(d.week?" "+d.week:"")+" ｜ "+d.title);
+    const hasDayMeta=!!(d.route||d.drive||d.sun||d.wx);
+    if(d.route)out.push("- 路线: "+d.route);
+    if(d.drive)out.push("- 驾驶: "+d.drive);
+    if(d.sun)out.push("- 日出日落: "+d.sun);
+    if(d.wx)out.push("- 天气: "+d.wx);
+    const items=d.items||[], extra=d.extra||[];
+    if(hasDayMeta&&(items.length||extra.length||d.stay))out.push("");
+    for(const it of items){
+      let rest=it.w+coord(it.lat,it.lng);
+      if(it.note)rest+=" ｜ "+it.note;
+      if(it.url)rest+=" ｜ "+it.url;
+      if(!rest)rest="｜";   // 全空条目兜底:发「｜」使再解析仍得 {w:"",note:"",url:""} 而非整行丢失
+      out.push("- "+it.t+" "+it.e+" "+rest);
+    }
+    for(const l of extra)out.push(l);   // 未识别行附回该天末尾(research §1.2 容错条款)
+    if(d.stay){
+      let s="- 🏨 宿: "+(d.stay.h||"");
+      // note 非空时强制发价格段(可为空):否则空 p 缺段,reparse 按位取段会把 note 漂移成 p
+      if(d.stay.note)s+=" ｜ "+(d.stay.p||"")+" ｜ "+d.stay.note;
+      else if(d.stay.p)s+=" ｜ "+d.stay.p;
+      s+=coord(d.stay.lat,d.stay.lng);
+      out.push(s);
+    }
+  }
+  const sec=T.secTitles||{};
+  if(sec.ck||(T.checklist&&T.checklist.length)){
+    out.push(""); out.push("## "+(sec.ck||"✅ 今天就订"));
+    for(const c of T.checklist||[])out.push("- [ ] "+c.t+(c.n?" ｜ "+c.n:""));   // 勾选态不写回 MD(走 localStorage)
+  }
+  if(sec.nt||(T.notes&&T.notes.length)){
+    out.push(""); out.push("## "+(sec.nt||"⚠️ 行前须知"));
+    for(const n of T.notes||[])out.push("- "+n);
+  }
+  if(sec.lk||(T.linkGroups&&T.linkGroups.length)){
+    out.push(""); out.push("## "+(sec.lk||"🔗 常用网址"));
+    for(const g of T.linkGroups||[]){
+      out.push(""); out.push("### "+g.name);
+      for(const it of g.items||[])out.push("- ["+it.t+"]("+it.u+")"+(it.n?" ｜ "+it.n:""));
+    }
+  }
+  return out.join("\n")+"\n";
+}
+/*SERIALIZER-END*/
+
+(function(){
+"use strict";
+const $=(s,p=document)=>p.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+/* 内联链接:href 只放行 http(s) 协议(防 javascript: 注入,威胁模型=导入外来 md);其余原样保留为文本 */
+const mdInline=s=>esc(s).replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+  (m,t,u)=>/^https?:\/\//i.test(u)?'<a target="_blank" rel="noopener" href="'+u+'">'+t+" ↗</a>":m);
+const DCOL={D1:"#C0392B",D2:"#1F6FB5",D3:"#0E8A5F",D4:"#8E44AD",D5:"#D97706",D6:"#0E7490",D7:"#C2185B",D8:"#5B8C00",D9:"#475569"};
+const dayColor=(i,id)=>DCOL[id]||"hsl("+((i*137.5)%360)+",55%,38%)";   // D1–D9 沿用,之后黄金角旋转
+
+/* localStorage:trip 级命名空间 ukmd.<tripId>.* ;全局偏好与 osrm2 路网缓存走 gstore(ukmd.*)
+   —— osrm2 几何/里程只取决于坐标链,与行程无关:键=坐标链,算一次永久缓存,跨方案共享 */
+let TRIP_ID="main";
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+          set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},
+          del(k){try{localStorage.removeItem(k)}catch(e){}}};
+const store={get:(k,d)=>LS.get("ukmd."+TRIP_ID+"."+k,d),
+             set:(k,v)=>LS.set("ukmd."+TRIP_ID+"."+k,v),
+             del:k=>LS.del("ukmd."+TRIP_ID+"."+k)};
+const gstore={get:(k,d)=>LS.get("ukmd."+k,d),set:(k,v)=>LS.set("ukmd."+k,v),del:k=>LS.del("ukmd."+k)};
+/* 一次性迁移:旧 ukmd.ck → 主方案空间(http 与 file:// 兜底两个 id 都铺);清理旧版 osrm 几何缓存;
+   per-trip osrm2 键搬到全局空间(同坐标链跨方案只留一份) */
+(function(){
+  try{
+    const old=localStorage.getItem("ukmd.ck");
+    if(old!=null){
+      for(const id of ["sample-trip","main"])
+        if(localStorage.getItem("ukmd."+id+".ck")==null)localStorage.setItem("ukmd."+id+".ck",old);
+      localStorage.removeItem("ukmd.ck");
+    }
+    Object.keys(localStorage).filter(k=>k.startsWith("ukmd.osrm.")).forEach(k=>localStorage.removeItem(k));
+    Object.keys(localStorage).filter(k=>/^ukmd\..+\.tzauto$/.test(k)).forEach(k=>localStorage.removeItem(k)); // 旧版无坐标指纹的 tzauto 缓存,作废清理
+    Object.keys(localStorage).filter(k=>/^ukmd\..+\.osrm2\./.test(k)).forEach(k=>{
+      const g=k.replace(/^ukmd\..+?\.osrm2\./,"ukmd.osrm2.");
+      if(localStorage.getItem(g)==null)localStorage.setItem(g,localStorage.getItem(k));
+      localStorage.removeItem(k);
+    });
+  }catch(e){}
+})();
+
+let TRIP=null, SRC="", TRIPS=null, TRIP_FILE="", TRIP_TZ="";
+let view="OV", tab="trip", gmode=false, viewSeq=0, activeIdx=-1;
+let loadSeq=0;   // 行程加载序号令牌:每次 loadTrip/导入预览 取新号,旧号在飞请求结算时一律丢弃(last-click-wins)
+
+/* ---------- 地图 ---------- */
+// 移动断点。声明须先于地图初始化(下方控件挂载同步读取,后置会触发 TDZ ReferenceError 崩整段脚本)
+const MQM=window.matchMedia?window.matchMedia("(max-width:720px)"):{matches:false};
+const map=L.map("map",{zoomControl:false}).setView([54.5,-3.5],6);
+map.createPane("offlinePane");
+map.getPane("offlinePane").style.zIndex=250;
+map.getPane("offlinePane").style.pointerEvents="none";
+// 移动端捏合缩放足够,不挂缩放控件;跨断点改窗口尺寸不动态迁移控件是有意为之
+if(!MQM.matches)L.control.zoom({position:"bottomright"}).addTo(map);
+const cartoLayer=L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+  {attribution:"&copy; OpenStreetMap &copy; CARTO",maxZoom:18}).addTo(map);
+// OSM/CARTO 署名是许可要求;移动端移至左上避免被抽屉遮盖
+if(MQM.matches)map.attributionControl.setPosition("topleft");
+const routeLayer=L.layerGroup().addTo(map);
+const markLayer=L.layerGroup().addTo(map);
+const sunLayer=L.layerGroup().addTo(map);   // ☀️ 太阳方位线/箭头独立图层,单独 clear
+
+/* fitBounds 自愈:记住当前应套的范围;地图容器尺寸从 0→有值时(PWA 冷启 / 移动端地址栏收放 / 隐藏标签页转可见 /
+   预览 iframe),Leaflet 若在 0 尺寸时算过 fitBounds 会停在世界视图——监听容器尺寸,补 invalidateSize 并重套范围 */
+let _lastFit=null;
+/* P4.2:抽屉态 fitBounds 统一走 applyFit,带「当前抽屉可见高度」的像素 bottom padding,标点不被抽屉盖住;
+   桌面 drawerPad()=0,行为与原 map.fitBounds(_lastFit) 完全一致。自愈重套(ResizeObserver)走同一路径。 */
+/* fitBounds/flyToBounds 统一像素 padding:桌面左侧悬浮面板 #panel 盖住地图左缘,需按面板实际占宽给左 padding,
+   否则路线按整个视口居中→被推到面板后(看着"偏");移动端沿用 drawerPad() 底部避让。P18 flyToBounds 共用本函数。 */
+function fitPadding(){
+  if(MQM.matches)return {paddingTopLeft:[0,0],paddingBottomRight:[0,drawerPad()]};
+  const r=panelEl&&panelEl.getBoundingClientRect();
+  const left=(r&&r.right>0&&r.bottom>0)?Math.round(r.right)+16:16;   // 折叠/0 尺寸兜底回 16
+  return {paddingTopLeft:[left,16],paddingBottomRight:[16,16]};
+}
+function applyFit(){
+  if(!_lastFit)return;
+  try{map.fitBounds(_lastFit,fitPadding());}catch(e){}
+}
+/* P18 切天平滑飞行(Google-Earth 式):setView 置 _flyNext,下一次 fitB 走 flyToBounds(跨度越大 duration 越长,封顶 1.2s);
+   其余重绘(编辑/预热/天气/自愈)仍瞬时,不每次动画。flyToBounds 与 applyFit 共用 fitPadding() 的面板避让。 */
+let _flyNext=false;
+function flyDuration(b){
+  try{const km=map.distance(map.getCenter(),b.getCenter())/1000;return Math.max(.45,Math.min(1.2,.45+km/900));}catch(e){return .8;}
+}
+function fitB(b,pad){
+  try{_lastFit=b.pad(pad);}catch(e){return;}
+  if(_flyNext){_flyNext=false;try{map.flyToBounds(_lastFit,Object.assign({duration:flyDuration(_lastFit)},fitPadding()));return;}catch(e){}}
+  applyFit();
+}
+(function(){
+  const el=document.getElementById("map"); let pw=0,ph=0;
+  if(typeof ResizeObserver==="function"){
+    new ResizeObserver(()=>{
+      const w=el.clientWidth,h=el.clientHeight; if(!w||!h)return;
+      const wasUnsized=!pw||!ph; pw=w;ph=h;
+      map.invalidateSize();
+      if(wasUnsized&&_lastFit)applyFit();   // 仅首次获得尺寸时重套,之后不夺用户手动缩放
+    }).observe(el);
+  }
+  window.addEventListener("resize",()=>map.invalidateSize());
+})();
+
+/* ---------- P4.2 三态底部抽屉(≤720px):peek 88px / half 50vh / full 92vh ----------
+   手柄拖拽跟手(.drag 关过渡 + 内联 translateY),松手吸附最近档;点按手柄循环档位(无拖拽兜底);
+   档位存 gstore("drawer") 下次保持;吸附后等过渡完重套 fitBounds(applyFit 读新抽屉高度)。 */
+const DW_STATES=["pk","hf","fl"];
+const panelEl=document.getElementById("panel");
+let dwState=(()=>{const s=gstore.get("drawer","hf");return DW_STATES.indexOf(s)>=0?s:"hf";})();
+function dwVisibleH(st){
+  const H=window.innerHeight;
+  if(st==="pk")return 88;
+  if(st==="hf")return Math.round(H*0.5);
+  return panelEl.offsetHeight||Math.round(H*0.92);   // offsetHeight 不含 transform,即 92vh 实高
+}
+function drawerPad(){
+  if(!MQM.matches)return 0;   // 桌面:零 padding,fitBounds 行为不变
+  return Math.min(dwVisibleH(dwState),Math.round(window.innerHeight*0.55));   // full 态封顶,防 padding 吃光地图
+}
+function dwApply(st,save){
+  dwState=st;
+  DW_STATES.forEach(x=>panelEl.classList.toggle("dw-"+x,x===st));
+  /* 评审修复:half/peek 只平移不改高,#content 底部随面板移出视口——把被移出高度写进 --dwgap,
+     CSS 补成 padding-bottom,half 态也能滚到真正的内容末尾(fl 态 gap=0,桌面清除) */
+  if(MQM.matches){
+    const gap=Math.max(0,(panelEl.offsetHeight||Math.round(window.innerHeight*0.92))-dwVisibleH(st));
+    panelEl.style.setProperty("--dwgap",gap+"px");
+  }else panelEl.style.removeProperty("--dwgap");
+  if(save)gstore.set("drawer",st);
+}
+(function(){
+  const h=document.getElementById("dhandle");
+  if(!h||!panelEl)return;
+  dwApply(dwState,false);   // 首屏即套存档档位(脚本同步于首次绘制前,无动画闪跳)
+  let drag=null;
+  const offsetOf=st=>Math.max(0,panelEl.offsetHeight-dwVisibleH(st));
+  /* tapCycle:tap(未达阈值)时是否循环档位。dhandle=true(原行为);phead=false(让 click 自然穿透) */
+  function start(y,tapCycle){drag={y0:y,base:offsetOf(dwState),moved:false,tapCycle:tapCycle!==false};panelEl.classList.add("drag");}
+  function move(y){
+    if(!drag)return;
+    const dy=y-drag.y0;
+    if(Math.abs(dy)>6)drag.moved=true;
+    const off=Math.min(offsetOf("pk"),Math.max(0,drag.base+dy));
+    panelEl.style.transform="translateY("+off+"px)";
+  }
+  function snap(st){
+    dwApply(st,true);
+    clearTimeout(snap._t);
+    snap._t=setTimeout(applyFit,300);   // 过渡(.26s)结束后按新抽屉高度重套 fitBounds
+  }
+  function end(y){
+    if(!drag)return;
+    const d=drag;drag=null;
+    panelEl.classList.remove("drag");
+    if(!d.moved){   // 点按
+      panelEl.style.transform="";
+      if(d.tapCycle)snap(DW_STATES[(DW_STATES.indexOf(dwState)+1)%3]);   // dhandle:peek→half→full→peek 循环
+      // phead:什么都不做,合成 click 自然触发 #t-row 下拉
+      return;
+    }
+    const off=Math.min(offsetOf("pk"),Math.max(0,d.base+(y-d.y0)));
+    const vis=panelEl.offsetHeight-off;
+    let best="pk",bd=Infinity;
+    DW_STATES.forEach(st=>{const dd=Math.abs(dwVisibleH(st)-vis);if(dd<bd){bd=dd;best=st;}});
+    snap(best);
+    panelEl.style.transform="";   // 清内联值:从手指位置过渡到吸附档
+  }
+  if(window.PointerEvent){
+    h.addEventListener("pointerdown",e=>{e.preventDefault();try{h.setPointerCapture(e.pointerId);}catch(_){ }start(e.clientY);});
+    h.addEventListener("pointermove",e=>{if(drag)move(e.clientY);});
+    h.addEventListener("pointerup",e=>end(e.clientY));
+    h.addEventListener("pointercancel",()=>{if(drag){drag=null;panelEl.classList.remove("drag");panelEl.style.transform="";dwApply(dwState,false);}});
+  }else{   // 旧 iOS 无 PointerEvent:touch 三件套 + 桌面 mouse 兜底
+    h.addEventListener("touchstart",e=>start(e.touches[0].clientY),{passive:true});
+    h.addEventListener("touchmove",e=>{if(drag){e.preventDefault();move(e.touches[0].clientY);}},{passive:false});
+    h.addEventListener("touchend",e=>end((e.changedTouches[0]||{clientY:0}).clientY));
+    h.addEventListener("mousedown",e=>{
+      e.preventDefault();start(e.clientY);
+      const mm=ev=>move(ev.clientY);
+      const mu=ev=>{end(ev.clientY);document.removeEventListener("mousemove",mm);document.removeEventListener("mouseup",mu);};
+      document.addEventListener("mousemove",mm);document.addEventListener("mouseup",mu);
+    });
+  }
+  /* A2:≤720px 下整块 #phead 也能拖抽屉,但 tap(未达阈值)保持 #t-row 正常 click(开行程下拉,绝不循环档位)。
+     与 dhandle 不同:pointerdown 不 preventDefault(否则杀 click),超 6px 阈值才"接管"——此刻才 setPointerCapture/start。 */
+  const ph=document.getElementById("phead");
+  if(ph){
+    /* 一次性吞掉拖拽后浏览器补发的合成 click,防误开下拉。合成 click 并非必发(iOS 对 preventDefault 过的
+       拖动常不补发),once 监听会滞留——两路径都在下次按下时先拆残留,只可能吞「紧随拖拽」那一枚,不吞后续正常 tap */
+    const suppressClick=e=>{e.stopPropagation();e.preventDefault();};
+    if(window.PointerEvent){
+      let pend=null;   // {id,y0,taken}:接管前只记起点,不动 drag
+      ph.addEventListener("pointerdown",e=>{ph.removeEventListener("click",suppressClick,true);if(!MQM.matches)return;pend={id:e.pointerId,y0:e.clientY,taken:false};});
+      ph.addEventListener("pointermove",e=>{
+        if(!pend||e.pointerId!==pend.id)return;
+        if(!pend.taken){
+          if(Math.abs(e.clientY-pend.y0)<=6)return;   // 未达阈值:不接管,留给 tap
+          pend.taken=true;
+          try{ph.setPointerCapture(e.pointerId);}catch(_){ }
+          start(pend.y0,false);   // 从按下点起拖;tapCycle=false 保证万一没拖动也不循环
+        }
+        e.preventDefault();move(e.clientY);   // 接管后吃掉 move,阻断滚动/橡皮筋
+      });
+      ph.addEventListener("pointerup",e=>{
+        if(!pend||e.pointerId!==pend.id)return;
+        const taken=pend.taken;pend=null;
+        if(taken){end(e.clientY);ph.addEventListener("click",suppressClick,{capture:true,once:true});}
+      });
+      ph.addEventListener("pointercancel",e=>{
+        if(!pend||e.pointerId!==pend.id)return;
+        const taken=pend.taken;pend=null;
+        if(taken&&drag){drag=null;panelEl.classList.remove("drag");panelEl.style.transform="";dwApply(dwState,false);}
+      });
+    }else{   // 旧 iOS 无 PointerEvent:touch 三件套,同样"超阈值才接管"语义;监听须 {passive:false} 以便接管后 preventDefault
+      let pend=null;
+      ph.addEventListener("touchstart",e=>{ph.removeEventListener("click",suppressClick,true);if(!MQM.matches)return;pend={y0:e.touches[0].clientY,taken:false};},{passive:true});
+      ph.addEventListener("touchmove",e=>{
+        if(!pend)return;
+        const y=e.touches[0].clientY;
+        if(!pend.taken){
+          if(Math.abs(y-pend.y0)<=6)return;
+          pend.taken=true;start(pend.y0,false);
+        }
+        e.preventDefault();move(y);
+      },{passive:false});
+      ph.addEventListener("touchend",e=>{
+        if(!pend)return;
+        const taken=pend.taken;pend=null;
+        if(taken){end((e.changedTouches[0]||{clientY:0}).clientY);ph.addEventListener("click",suppressClick,{capture:true,once:true});}
+      });
+      ph.addEventListener("touchcancel",()=>{
+        if(!pend)return;
+        const taken=pend.taken;pend=null;
+        if(taken&&drag){drag=null;panelEl.classList.remove("drag");panelEl.style.transform="";dwApply(dwState,false);}
+      });
+    }
+  }
+  const onMQ=()=>{panelEl.style.transform="";dwApply(dwState,false);applyFit();};   // 跨断点:清拖拽残留,重算 --dwgap,按新 drawerPad 重套
+  if(MQM.addEventListener)MQM.addEventListener("change",onMQ);
+  else if(MQM.addListener)MQM.addListener(onMQ);
+  // 旋屏/地址栏收放改变 innerHeight → --dwgap 失准,空闲时重算(拖拽中不动,松手 snap 自会重算)
+  window.addEventListener("resize",()=>{if(MQM.matches&&!drag)dwApply(dwState,false);});
+})();
+
+/* ---------- P4.6 定位蓝点:HTTPS/localhost 且支持 geolocation 才挂载;点开点关,蓝点+精度圈 ----------
+   file:// 或不支持时整支不挂(无按钮)。独立图层不进 renderMap 的 clearLayers,切天/重绘不丢。
+   移动端:不挂 Leaflet 控件,改为往 #modebar 追加 #mb-loc 按钮;桌面:保留 Leaflet 控件路径。
+   btn 变量同时兼容两种宿主(Leaflet <a> 或 modebar <button>),toggle/stop 逻辑不区分。 */
+(function(){
+  const okProto=location.protocol==="https:"||location.hostname==="localhost"||location.hostname==="127.0.0.1";
+  if(!okProto||!navigator.geolocation||!window.isSecureContext)return;
+  const locLayer=L.layerGroup().addTo(map);
+  let watchId=null,first=false,btn=null;
+  function stop(){
+    if(watchId!=null){try{navigator.geolocation.clearWatch(watchId);}catch(e){}watchId=null;}
+    locLayer.clearLayers();
+    if(btn)btn.classList.remove("on");
+  }
+  function toggle(){
+    if(watchId!=null){stop();return;}
+    first=true;
+    if(btn)btn.classList.add("on");
+    watchId=navigator.geolocation.watchPosition(p=>{
+      locLayer.clearLayers();
+      const ll=[p.coords.latitude,p.coords.longitude];
+      L.circle(ll,{radius:Math.max(p.coords.accuracy||0,15),color:"#0D5EAF",weight:1,opacity:.5,fillColor:"#0D5EAF",fillOpacity:.12}).addTo(locLayer);
+      L.circleMarker(ll,{radius:7,color:"#fff",weight:2.5,fillColor:"#0D5EAF",fillOpacity:1})
+        .bindPopup("📍 当前位置(±"+Math.round(p.coords.accuracy||0)+"m)").addTo(locLayer);
+      if(first){first=false;map.flyTo(ll,Math.max(map.getZoom(),12),{duration:.7});}
+    },err=>{stop();toast("定位失败:"+((err&&err.message)||"权限被拒或不可用"));},
+    {enableHighAccuracy:true,maximumAge:15000,timeout:20000});
+  }
+  if(MQM.matches){
+    // 移动端:并入 modebar 第 4 键
+    btn=document.createElement("button");
+    btn.id="mb-loc";btn.title="显示当前位置(再点关闭)";btn.textContent="⌖";
+    btn.addEventListener("click",toggle);
+    document.getElementById("modebar").appendChild(btn);
+  }else{
+    // 桌面:保持 Leaflet 控件
+    const ctl=L.control({position:"bottomright"});
+    ctl.onAdd=function(){
+      const div=L.DomUtil.create("div","leaflet-bar locctl");
+      btn=L.DomUtil.create("a","",div);
+      btn.href="#";btn.title="显示当前位置(再点关闭)";btn.innerHTML="⌖";
+      L.DomEvent.on(btn,"click",e=>{L.DomEvent.stop(e);toggle();});
+      return div;
+    };
+    ctl.addTo(map);
+  }
+})();
+
+const pin=(label,color)=>L.divIcon({className:"",iconSize:[23,23],iconAnchor:[12,12],
+  html:'<div style="width:23px;height:23px;border-radius:50%;background:'+color+
+  ';color:#fff;border:2.5px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font:800 11px Archivo,sans-serif">'+label+"</div>"});
+
+function dayPoints(d){
+  const pts=[];
+  d.items.forEach(it=>{ if(it.lat!=null) pts.push({lat:it.lat,lng:it.lng,name:it.w,t:it.t,ferry:it.ferry,stay:false}); });
+  if(d.stay&&d.stay.lat!=null) pts.push({lat:d.stay.lat,lng:d.stay.lng,name:d.stay.h,t:"",ferry:false,stay:true});
+  return pts;
+}
+function prevStayPoint(di){
+  for(let i=di-1;i>=0;i--){const p=dayPoints(TRIP.days[i]);if(p.length)return p[p.length-1];}
+  return null;
+}
+function routeChain(di){           // [{pts:[...],sea:bool}] 段落
+  const d=TRIP.days[di], pts=dayPoints(d).slice(), pv=prevStayPoint(di);
+  if(pv) pts.unshift(pv);
+  const dedup=[];
+  pts.forEach(p=>{const l=dedup[dedup.length-1];
+    if(!l||Math.abs(l.lat-p.lat)>1e-4||Math.abs(l.lng-p.lng)>1e-4)dedup.push(p);});
+  const segs=[];let chain=[dedup[0]];
+  for(let i=1;i<dedup.length;i++){
+    if(dedup[i].ferry){
+      if(chain.length>1)segs.push({pts:chain,sea:false});
+      segs.push({pts:[chain[chain.length-1],dedup[i]],sea:true});
+      chain=[dedup[i]];
+    }else chain.push(dedup[i]);
+  }
+  if(chain.length>1)segs.push({pts:chain,sea:false});
+  return segs;
+}
+function osrmKey(coords){return "osrm2."+coords.map(c=>c[0].toFixed(4)+","+c[1].toFixed(4)).join(";");}
+/* 带超时的 fetch:黑洞式挂起(captive portal/弱网半开)下 8s 必返回,降级链才走得到兜底 */
+async function fetchTO(url,opt,ms){
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),ms||8000);
+  try{return await fetch(url,Object.assign({signal:ctrl.signal},opt||{}));}
+  catch(e){throw(e&&e.name==="AbortError")?new Error("请求超时(8s)"):e;}
+  finally{clearTimeout(to);}
+}
+async function osrm(coords){
+  const key=osrmKey(coords);
+  const hit=gstore.get(key,null); if(hit&&hit.geo) return hit;
+  const q=coords.map(c=>c[1]+","+c[0]).join(";");
+  for(const h of ["https://router.project-osrm.org","https://routing.openstreetmap.de/routed-car"]){
+    try{
+      const r=await fetchTO(h+"/route/v1/driving/"+q+"?overview=full&geometries=geojson");
+      if(!r.ok)continue;
+      const j=await r.json();
+      if(j.routes&&j.routes[0]){
+        const rt=j.routes[0];
+        const val={geo:rt.geometry.coordinates.map(p=>[p[1],p[0]]),
+                   km:Math.round(rt.distance/100)/10, min:Math.round(rt.duration/60)};
+        gstore.set(key,val); return val;
+      }
+    }catch(e){}
+  }
+  return null;
+}
+function dayDriveStats(di){               // 当日实测里程/时长求和(渡海段跳过,只读缓存)
+  let km=0,min=0,segs=0,have=0;
+  for(const seg of routeChain(di)){
+    if(seg.sea)continue;
+    segs++;
+    const hit=gstore.get(osrmKey(seg.pts.map(p=>[p.lat,p.lng])),null);
+    if(hit&&hit.geo){have++;km+=hit.km;min+=hit.min;}
+  }
+  return {km:Math.round(km*10)/10,min,segs,have,complete:segs>0&&have===segs};
+}
+function fmtDur(min){const h=Math.floor(min/60),m=min%60;return h?h+"h"+(m?String(m).padStart(2,"0")+"m":""):m+"m";}
+/* 紧凑驾驶串(日况用):OSRM 实测优先;算不出回退手写 drive 的「🚗…」前缀(去括号注解)。返回不含 🚗 前缀 */
+function briefDrive(di){
+  const st=dayDriveStats(di);
+  if(st.complete)return st.km+"km · "+fmtDur(st.min);
+  if(st.have)return "≥"+st.km+"km · ≥"+fmtDur(st.min);
+  const d=TRIP.days[di];
+  if(d.drive){const m=d.drive.replace(/^\s*🚗\s*/,"").match(/^[^(（]*/);return ((m?m[0]:d.drive)||"").trim();}
+  return "";
+}
+function updateDriveStats(di){
+  const el=$("#drv-auto");
+  if(!el||!TRIP||!TRIP.days[di]||view!==TRIP.days[di].id)return;
+  el.textContent=briefDrive(di)||"—";
+}
+async function drawDayRoute(di,color,seq){
+  for(const seg of routeChain(di)){
+    if(seq!==viewSeq)return;
+    const raw=seg.pts.map(p=>[p.lat,p.lng]);
+    if(seg.sea){
+      L.polyline(raw,{color:"#1F6FB5",weight:3,dashArray:"2 7",opacity:.9}).addTo(routeLayer);
+      continue;
+    }
+    const dash=L.polyline(raw,{color,weight:3,dashArray:"6 7",opacity:.7}).addTo(routeLayer);
+    const res=await osrm(raw);
+    if(seq!==viewSeq)return;
+    if(res){
+      routeLayer.removeLayer(dash);
+      L.polyline(res.geo,{color:"#fff",weight:6,opacity:.9}).addTo(routeLayer);
+      L.polyline(res.geo,{color,weight:3.5}).addTo(routeLayer);
+    }
+  }
+}
+let dayMarkers=[];
+function renderMap(){
+  viewSeq++; const seq=viewSeq;
+  routeLayer.clearLayers(); markLayer.clearLayers(); sunLayer.clearLayers(); dayMarkers=[];
+  if(!TRIP||!TRIP.days.length)return;
+  if(view==="OV"){
+    const first=dayPoints(TRIP.days[0])[0];
+    const ov=[];
+    if(first)ov.push({...first,label:"起",color:"#03543C"});
+    TRIP.days.forEach((d,i)=>{
+      const pts=dayPoints(d); if(!pts.length)return;
+      const last=pts[pts.length-1];
+      ov.push({...last,label:(i===TRIP.days.length-1&&!d.stay)?"终":String(i+1),color:dayColor(i,d.id)});
+    });
+    const g=L.featureGroup();
+    ov.forEach(p=>{L.marker([p.lat,p.lng],{icon:pin(p.label,p.stay?"#0D5EAF":p.color)})
+      .bindPopup("<b>"+esc(p.name)+"</b>").addTo(g);});
+    g.addTo(markLayer);
+    if(g.getLayers().length)fitB(g.getBounds(),0.12);
+    (async()=>{for(let i=0;i<TRIP.days.length;i++){if(seq!==viewSeq)return;await drawDayRoute(i,dayColor(i,TRIP.days[i].id),seq);}})();
+  }else{
+    const di=TRIP.days.findIndex(d=>d.id===view); if(di<0)return;
+    const pts=dayPoints(TRIP.days[di]);
+    const g=L.featureGroup();
+    pts.forEach((p,i)=>{
+      const m=L.marker([p.lat,p.lng],{icon:pin(String(i+1),p.stay?"#0D5EAF":"#03543C")})
+        .bindPopup("<b>"+(i+1)+". "+esc(p.name)+"</b>"+(p.t?"<br>"+esc(view)+" · "+esc(p.t):""));
+      m.addTo(g); dayMarkers.push(m);
+      // 标点点击反向联动时间轴:高亮并滚动对应 li
+      (idx=>{m.on("click",()=>{
+        document.querySelectorAll("#content .act").forEach(x=>x.classList.remove("act"));
+        const li=document.querySelector("#content li[data-n='"+idx+"']");
+        if(li){li.classList.add("act");li.scrollIntoView({block:"center"});}
+      });})(i);
+      // ☀️ 临时锚:点标点把方位线/读数迁到该点(on 叠加监听,与上面时间轴联动共存)
+      m.on("click",()=>{if(sunMode)setSunAnchor({lat:p.lat,lng:p.lng,name:p.name});});
+    });
+    g.addTo(markLayer);
+    if(pts.length)fitB(g.getBounds(),0.2);
+    drawDayRoute(di,dayColor(di,view),seq).then(()=>{if(seq===viewSeq)updateDriveStats(di);});
+  }
+  if(sunMode)drawSun(seq);
+}
+
+/* ---------- 太阳(SunCalc,纯本地计算;CDN 失败则整支降级,不影响其它功能)---------- */
+const SUN_OK=!!(window.SunCalc&&typeof SunCalc.getTimes==="function"&&typeof SunCalc.getPosition==="function");
+let sunMode=false;
+/* 临时太阳锚(「临时查看」):☀️ 模式点标点/时间轴条目设定,方位线/箭头/读数/时刻全迁该点;
+   null=自动晨/晚双锚。sunRow/sunBadge 不随它变(「当日行程计划」语义)。切天/重载/关 ☀️ 复位 */
+let sunAnchor=null;
+/* trip 时区格式化器(惰性 + 随 TRIP_TZ 变化重建);严禁 getHours(),否则显示北京时间 */
+let _sunFmtTz="",_sunFmt=null;
+function sunFmt(){
+  const tz=TRIP_TZ||Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if(_sunFmt&&_sunFmtTz===tz)return _sunFmt;
+  _sunFmtTz=tz;
+  _sunFmt=new Intl.DateTimeFormat("zh-CN",{timeZone:tz,hour:"2-digit",minute:"2-digit",hour12:false});
+  return _sunFmt;
+}
+const hhmm=d=>(d&&!isNaN(d))?sunFmt().format(d):"—";
+const compass=az=>((az*180/Math.PI+180)%360+360)%360;   // SunCalc 自正南起、向西为正 → 自北罗盘度
+const COMPASS16=["北","北偏东","东北","东偏北","东","东偏南","东南","南偏东","南","南偏西","西南","西偏南","西","西偏北","西北","北偏西"];
+const compassName=deg=>COMPASS16[Math.round(deg/22.5)%16];
+/* 由 dateISO 取当日 UTC 正午 Date(避免日界偏移)。无 dateISO 则返回 null */
+function dayNoonUTC(d){
+  const m=(d&&d.dateISO||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m)return null;
+  return new Date(Date.UTC(+m[1],+m[2]-1,+m[3],12));
+}
+/* 当日双锚点:晨锚=上一日宿(无则当日首坐标);晚锚=当日宿(无则当日末坐标) */
+function dawnAnchor(di){
+  const pv=prevStayPoint(di); if(pv)return pv;
+  const p=dayPoints(TRIP.days[di]); return p.length?p[0]:null;
+}
+function duskAnchor(di){
+  const p=dayPoints(TRIP.days[di]); return p.length?p[p.length-1]:null;
+}
+/* 当日日照摘要:晨锚算 sunrise/goldenHourEnd,晚锚算 sunset/goldenHour/方位。降级返回 {ok:false} */
+function daySun(di){
+  if(!SUN_OK)return {ok:false};
+  const d=TRIP.days[di], noon=dayNoonUTC(d);
+  if(!noon)return {ok:false};
+  const am=dawnAnchor(di), pm=duskAnchor(di);
+  if(!am||!pm)return {ok:false};
+  const tAm=SunCalc.getTimes(noon,am.lat,am.lng);
+  const tPm=SunCalc.getTimes(noon,pm.lat,pm.lng);
+  const sunsetPos=SunCalc.getPosition(tPm.sunset,pm.lat,pm.lng);
+  const sunrisePos=SunCalc.getPosition(tAm.sunrise,am.lat,am.lng);
+  return {ok:true,noon,am,pm,
+    sunrise:tAm.sunrise,sunset:tPm.sunset,
+    goldenHourEnd:tAm.goldenHourEnd,goldenHour:tPm.goldenHour,
+    sunriseAz:compass(sunrisePos.azimuth),sunsetAz:compass(sunsetPos.azimuth)};
+}
+/* 单锚日照:晨/晚双锚都换成 a,返回与 daySun 同构,drawSun 可无差别消费 */
+function anchorSun(di,a){
+  if(!SUN_OK||!a)return {ok:false};
+  const noon=dayNoonUTC(TRIP.days[di]); if(!noon)return {ok:false};
+  const t=SunCalc.getTimes(noon,a.lat,a.lng);
+  return {ok:true,noon,am:a,pm:a,
+    sunrise:t.sunrise,sunset:t.sunset,
+    goldenHourEnd:t.goldenHourEnd,goldenHour:t.goldenHour,
+    sunriseAz:compass(SunCalc.getPosition(t.sunrise,a.lat,a.lng).azimuth),
+    sunsetAz:compass(SunCalc.getPosition(t.sunset,a.lat,a.lng).azimuth)};
+}
+/* 锚点徽标:独立常驻容器,只在锚变化时重建(滑杆高频 input 只动读数不碰它),✕ 监听走容器级委托不随重建丢失 */
+function updateSunAnchorBadge(){
+  const el=$("#sun-anchor"); if(!el)return;
+  el.innerHTML=sunAnchor?'<span class="nm">📍'+esc(sunAnchor.name||"")+'</span><button id="sun-anchor-x" title="清除临时锚点,回自动锚">✕</button>':"";
+}
+function setSunAnchor(a){
+  if(!SUN_OK||!sunMode)return;
+  sunAnchor=a;updateSunAnchorBadge();drawSun(viewSeq);
+}
+/* 只复位状态与徽标,不重画——调用方(setView/init/setSunMode)各自带重绘或清层 */
+function clearSunAnchor(){
+  if(!sunAnchor)return;
+  sunAnchor=null;updateSunAnchorBadge();
+}
+/* HH:MM(trip 时区) → 当日该时刻的绝对 Date。借 Intl 反推时区偏移,无需硬编码 BST */
+function localHHMMToDate(d,hh,mi){
+  const noon=dayNoonUTC(d); if(!noon)return null;
+  const tz=TRIP_TZ||Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // 取正午这一刻在 trip 时区显示出的本地时分,反推本地相对 UTC 的整体偏移
+  const lp=new Intl.DateTimeFormat("en-GB",{timeZone:tz,hour:"numeric",minute:"numeric",day:"numeric",hour12:false}).formatToParts(noon);
+  const lh=+(lp.find(p=>p.type==="hour").value), lm=+(lp.find(p=>p.type==="minute").value), ld=+(lp.find(p=>p.type==="day").value);
+  let offsetMin=(lh*60+lm)-(12*60);   // 本地正午相对 UTC 正午的偏移(如 BST=+60)
+  const ud=noon.getUTCDate();
+  if(ld!==ud)offsetMin+=((ld-ud===1)||(ld<ud-1))?1440:-1440;   // UTC+12:01~+14(如新西兰夏令时)本地已是次日,差一天补 ±24h
+  const ms=noon.getTime()-12*3600*1000+(hh*60+mi-offsetMin)*60*1000;
+  return new Date(ms);
+}
+/* 给定时刻分类:'gold'(黄金时刻)/'night'(日落后/日出前)/''。
+   恒用自动锚 daySun(「当日行程计划」),不随临时查看锚 sunAnchor 漂移 */
+function sunBadge(di,hh,mi){
+  if(!SUN_OK)return "";
+  const s=daySun(di); if(!s.ok)return "";
+  const dt=localHHMMToDate(TRIP.days[di],hh,mi); if(!dt)return "";
+  const t=dt.getTime();
+  if(t<s.sunrise.getTime()||t>s.sunset.getTime())return "🌙";
+  if((t>=s.goldenHour.getTime()&&t<=s.sunset.getTime())||(t>=s.sunrise.getTime()&&t<=s.goldenHourEnd.getTime()))return "📸";
+  return "";
+}
+/* 从锚点沿罗盘方位画一条射线(地理近似:按纬度修正经度步长) */
+function azLine(lat,lng,deg,color,km){
+  const R=6371,d=(km||7)/R,br=deg*Math.PI/180,la=lat*Math.PI/180,lo=lng*Math.PI/180;
+  const la2=Math.asin(Math.sin(la)*Math.cos(d)+Math.cos(la)*Math.sin(d)*Math.cos(br));
+  const lo2=lo+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(la),Math.cos(d)-Math.sin(la)*Math.sin(la2));
+  return [[lat,lng],[la2*180/Math.PI,lo2*180/Math.PI]];
+}
+/* 画当日 日出(金)/日落(橙)方位线 + 滑杆时刻的太阳方位箭头。复用 viewSeq 守卫防竞态 */
+function drawSun(seq){
+  if(seq!==undefined&&seq!==viewSeq)return;
+  sunLayer.clearLayers();
+  if(!SUN_OK||!sunMode||!TRIP||view==="OV")return;
+  const di=TRIP.days.findIndex(d=>d.id===view); if(di<0)return;
+  const s=sunAnchor?anchorSun(di,sunAnchor):daySun(di); if(!s.ok)return;
+  const am=s.am, pm=s.pm;
+  const tag=sunAnchor?" · 📍"+esc(sunAnchor.name||""):"";   // tooltip 标注临时锚来源
+  // 日出方位线(金):画在晨锚(临时锚态两线同点)
+  L.polyline(azLine(am.lat,am.lng,s.sunriseAz,"#E0A82E"),{color:"#fff",weight:5,opacity:.85}).addTo(sunLayer);
+  L.polyline(azLine(am.lat,am.lng,s.sunriseAz,"#E0A82E"),{color:"#E0A82E",weight:3,opacity:.95})
+    .bindTooltip("🌅 日出 "+hhmm(s.sunrise)+" · "+compassName(s.sunriseAz)+"("+Math.round(s.sunriseAz)+"°)"+tag).addTo(sunLayer);
+  // 日落方位线(橙):画在晚锚
+  L.polyline(azLine(pm.lat,pm.lng,s.sunsetAz,"#E8632A"),{color:"#fff",weight:5,opacity:.85}).addTo(sunLayer);
+  L.polyline(azLine(pm.lat,pm.lng,s.sunsetAz,"#E8632A"),{color:"#E8632A",weight:3,opacity:.95})
+    .bindTooltip("🌇 日落 "+hhmm(s.sunset)+" · "+compassName(s.sunsetAz)+"("+Math.round(s.sunsetAz)+"°)"+tag).addTo(sunLayer);
+  drawSunArrow(di);
+}
+/* 滑杆当前时刻:在晚锚画太阳方位箭头并刷新读数;低于地平线变灰、不画线 */
+let _sunArrowLayer=null;
+function drawSunArrow(di){
+  if(!SUN_OK||!sunMode)return;
+  if(_sunArrowLayer){sunLayer.removeLayer(_sunArrowLayer);_sunArrowLayer=null;}
+  const d=TRIP.days[di], noon=dayNoonUTC(d), pm=sunAnchor||duskAnchor(di);   // 临时锚优先,自动态用晚锚
+  const read=$("#sun-read"), tEl=$("#sun-t"), altEl=$("#sun-alt"), azEl=$("#sun-az");
+  if(!noon||!pm){if(read)read.classList.add("below");if(tEl)tEl.textContent="—";if(altEl)altEl.textContent="高度角 —";if(azEl)azEl.textContent="方位 —";return;}
+  const mins=+($("#sun-slider").value);
+  const hh=Math.floor(mins/60), mi=mins%60;
+  const dt=localHHMMToDate(d,hh,mi);
+  const pos=SunCalc.getPosition(dt,pm.lat,pm.lng);
+  const alt=pos.altitude*180/Math.PI, az=compass(pos.azimuth);
+  if(tEl)tEl.textContent=String(hh).padStart(2,"0")+":"+String(mi).padStart(2,"0");
+  if(altEl)altEl.textContent="高度角 "+alt.toFixed(1)+"°";
+  if(azEl)azEl.textContent="方位 "+compassName(az)+"("+Math.round(az)+"°)";
+  if(read)read.classList.toggle("below",alt<0);
+  if(alt<0)return;   // 地平线下:不画箭头
+  const len=2+10*Math.cos(pos.altitude);   // 高度角越高线越短(投影感)
+  _sunArrowLayer=L.layerGroup();
+  L.polyline(azLine(pm.lat,pm.lng,az,"#F59E0B",len),{color:"#fff",weight:6,opacity:.8}).addTo(_sunArrowLayer);
+  L.polyline(azLine(pm.lat,pm.lng,az,"#F59E0B",len),{color:"#F59E0B",weight:3.5}).addTo(_sunArrowLayer);
+  const tip=azLine(pm.lat,pm.lng,az,"#F59E0B",len)[1];
+  L.circleMarker(tip,{radius:6,color:"#fff",weight:2,fillColor:"#F59E0B",fillOpacity:1}).addTo(_sunArrowLayer);
+  _sunArrowLayer.addTo(sunLayer);
+}
+/* 渲染层日出日落:自动值优先,手写值作离线兜底;偏差>10min 出一条 lint(不进 parseTrip,保持其纯函数)。
+   恒用自动锚 daySun(「当日行程计划」),不随临时查看锚 sunAnchor 漂移 */
+function sunRow(di){
+  const d=TRIP.days[di];
+  const s=daySun(di);
+  if(s.ok){
+    let lint="";
+    const hw=(d.sun||"").match(/(\d{1,2}):(\d{2})\D+(\d{1,2}):(\d{2})/);
+    if(hw){
+      const toMin=t=>{const m=hhmm(t).match(/(\d{1,2}):(\d{2})/);return m?+m[1]*60+ +m[2]:null;};
+      const ar=toMin(s.sunrise), as=toMin(s.sunset);
+      const hr=+hw[1]*60+ +hw[2], hs=+hw[3]*60+ +hw[4];
+      const dr=ar!=null?Math.abs(ar-hr):0, ds=as!=null?Math.abs(as-hs):0;
+      if(dr>10||ds>10)lint=d.id+" 日出日落手写值「"+d.sun+"」与自动计算「"+hhmm(s.sunrise)+" / "+hhmm(s.sunset)+"」偏差 "+Math.max(dr,ds)+"min(>10min),建议核对或删手写值改用自动";
+    }
+    return {html:"<span>🌅 "+esc(hhmm(s.sunrise))+" / "+esc(hhmm(s.sunset))+"</span>",lint};
+  }
+  // 降级:无 SunCalc 或无 dateISO/坐标 → 退回手写文案(无则不显示)
+  return {html:d.sun?"<span>🌅 "+esc(d.sun)+"</span>":"",lint:""};
+}
+/* 渲染层日出日落偏差 lint(全行程扫描;与 parser 的 T.warnings 合并展示,不污染 parseTrip) */
+function sunLints(){
+  if(!SUN_OK||!TRIP)return [];
+  const out=[];
+  for(let i=0;i<TRIP.days.length;i++){const l=sunRow(i).lint; if(l)out.push(l);}
+  return out;
+}
+/* 渲染层驾驶里程偏差 lint(仿 sunLints):手写「驾驶: …Nkm…」首个 km 数 vs OSRM 实测求和,差>20% 出一条。
+   仅当当日实测完整(各陆段都已算出)且手写有里程数字时比;OSRM 为纯驾驶不含停留,只看里程不看时长。 */
+function driveLints(){
+  if(!TRIP)return [];
+  const out=[];
+  for(let i=0;i<TRIP.days.length;i++){
+    const d=TRIP.days[i]; if(!d.drive)continue;
+    const m=String(d.drive).match(/(\d+(?:\.\d+)?)\s*(?:km|公里|千米)/i); if(!m)continue;   // 抽首个 km 数字
+    const hw=parseFloat(m[1]); if(!(hw>0))continue;
+    const st=dayDriveStats(i); if(!st.complete||!(st.km>0))continue;
+    const dev=Math.abs(st.km-hw)/hw;
+    if(dev>0.20)out.push(d.id+" 手写驾驶「"+hw+"km」与 OSRM 实测「"+st.km+"km」偏差 "+Math.round(dev*100)+"%(>20%),建议核对或用「📌 固化」回写实测");
+  }
+  return out;
+}
+function allWarnings(){return (TRIP&&TRIP.warnings||[]).concat(sunLints()).concat(driveLints());}
+function setSunMode(on){
+  if(!SUN_OK)return;
+  sunMode=on;
+  $("#mb-sun").classList.toggle("on",on);
+  $("#sunbar").classList.toggle("on",on&&view!=="OV");
+  if(on){renderPanel();fillWeatherDOM();drawSun(viewSeq);}   // renderPanel 重绘时间轴以挂/摘 📸🌙
+  else{clearSunAnchor();sunLayer.clearLayers();_sunArrowLayer=null;renderPanel();fillWeatherDOM();}   // 关 ☀️:临时锚一并复位
+}
+if(SUN_OK){
+  $("#mb-sun").onclick=()=>setSunMode(!sunMode);
+  // ✕ 清临时锚:监听挂常驻容器(委托),徽标 innerHTML 重建不丢
+  $("#sun-anchor").addEventListener("click",e=>{
+    if(!e.target.closest("#sun-anchor-x"))return;
+    clearSunAnchor();drawSun(viewSeq);
+  });
+  $("#sun-slider").addEventListener("input",()=>{
+    if(!TRIP||view==="OV")return;
+    const di=TRIP.days.findIndex(d=>d.id===view); if(di>=0)drawSunArrow(di);
+  });
+}else{
+  $("#mb-sun").style.display="none";   // CDN 失败:隐藏开关,其它功能完全不受影响
+}
+
+/* ---------- 天气(Open-Meteo,免 key / CORS 全开;预报 ≤15 天,否则近 10 年同日气候)----------
+   全部异步、绝不阻塞渲染:首屏先用手写 d.wx 直出,自动值命中缓存→立即替换,否则发请求成功后就地回填。
+   缓存只取决于「坐标(0.1° 圆整)+ 日期」,与 tripId 无关 → 一律走全局 gstore(ukmd.wx.*)。
+   值结构 {data,ts}(区别于 osrm2 永久缓存):按 TTL 判是否重新请求,过期不删键(留作离线兜底)。 */
+const FC_TTL=6*3600*1e3, CLIM_TTL=30*864e5;   // 预报 6h / 气候 30d
+const WX_CODE={0:"☀️",1:"🌤",2:"⛅",3:"☁️",45:"🌫",48:"🌫",51:"🌦",53:"🌦",55:"🌧",
+  56:"🌧",57:"🌧",61:"🌧",63:"🌧",65:"🌧",66:"🌧",67:"🌧",71:"🌨",73:"🌨",75:"🌨",77:"🌨",
+  80:"🌦",81:"🌧",82:"⛈",85:"🌨",86:"🌨",95:"⛈",96:"⛈",99:"⛈"};
+const wxEmoji=c=>WX_CODE[c]||"🌡";
+const grid=v=>(Math.round(v/0.1)*0.1).toFixed(2);   // 0.1°(~11km)圆整定长(去重 + 命中同格缓存)。
+// 为何不用 0.25°:Open-Meteo 把 0.25° 取样点 snap 到最近 ERA5 格,沿海/河谷住宿易被推进 ~10km 外的
+// 高海拔山格,温度系统性偏冷一截——实测 D2 Portree 宿(57.4125,-6.1955)在 0.25° 下落到 57.54,-6.18
+// 海拔 307m 山格(tmax 中位 13.1℃→展示 9–13℃,低于手写「11–16℃」/研究「11–15℃」),0.1° 则落到
+// 57.40,-6.20 海拔 17m 海岸格(tmax 中位 14.8℃→展示 11–15℃,达标);D3 Glencoe 同理 0.25° 误入 794m
+// 山顶格、0.1° 退回谷底。0.1° 仍足够粗以去重近邻点、合并缓存,但够细以保住「海岸≠山顶」的地形区分。
+/* TTL 包装读写:写掺写入时间戳;读判新鲜(过期返回 {data,stale:true} 供离线兜底) */
+function wxGet(key,ttl){
+  const r=gstore.get(key,null);
+  if(!r||!r.ts||r.data==null)return null;
+  return {data:r.data,stale:(Date.now()-r.ts)>=ttl};
+}
+function wxSet(key,data){gstore.set(key,{data,ts:Date.now()});}
+/* 目标日距「今天(trip 时区)」的天数差;≤15 走预报,>15 走气候 */
+function daysFromToday(dateISO){
+  const tz=TRIP_TZ||Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const p=new Intl.DateTimeFormat("en-CA",{timeZone:tz,year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+  const todayU=Date.UTC(+p.slice(0,4),+p.slice(5,7)-1,+p.slice(8,10));
+  const m=String(dateISO||"").match(/^(\d{4})-(\d{2})-(\d{2})$/); if(!m)return null;
+  return Math.round((Date.UTC(+m[1],+m[2]-1,+m[3])-todayU)/864e5);
+}
+/* P4.6 行中模式:今天(trip 时区)落在行程内 → 该天 id;否则 null。通用日期判断,不写死任何行程 */
+function todayDayId(){
+  if(!TRIP)return null;
+  const d=TRIP.days.find(x=>x.dateISO&&daysFromToday(x.dateISO)===0);
+  return d?d.id:null;
+}
+/* 当前时刻 HH:MM(trip 时区;sunFmt 同源,严禁 getHours 走浏览器时区) */
+function nowHHMM(){return sunFmt().format(new Date());}
+/* 展示串:emoji + tmin–tmax℃ + ☔n%(+【预报】/【近10年同日】徽标)。w={e,tmin,tmax,pop,src} */
+function wxStr(w){
+  if(!w)return "";
+  const t=Math.round(w.tmin)+"–"+Math.round(w.tmax)+"℃";
+  const pop=(w.pop!=null)?" ☔"+Math.round(w.pop)+"%":"";
+  return w.e+" "+t+pop;
+}
+/* 当日展示锚点(research §1.2:展示取晚锚)= 当日宿,无则当日末坐标点 */
+function wxAnchor(di){const p=duskAnchor(di);return p;}
+const median=a=>{const s=a.slice().sort((x,y)=>x-y),n=s.length;return n?(n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2):null;};
+const pct=(a,p)=>{const s=a.slice().sort((x,y)=>x-y);return s.length?s[Math.min(s.length-1,Math.floor(p/100*s.length))]:null;};
+const mode=a=>{const m={};let best=null,bn=0;for(const v of a){m[v]=(m[v]||0)+1;if(m[v]>bn){bn=m[v];best=v;}}return best;};
+/* 气候法聚合:archive 跨 10 年原始数组 → 目标 mmdd ±3 天窗口筛样本 → 摘要(只缓存摘要) */
+function aggregateClim(daily,mmdd){
+  const tmax=[],tmin=[],codes=[];let rain=0,tot=0;
+  const times=daily.time||[], TX=daily.temperature_2m_max||[], TN=daily.temperature_2m_min||[],
+        WC=daily.weather_code||[], PR=daily.precipitation_sum||[];
+  const mt=+mmdd.slice(0,2), md=+mmdd.slice(2,4);
+  const center=Date.UTC(2000,mt-1,md);                 // 任意基准年,只比月日距离
+  for(let i=0;i<times.length;i++){
+    const m=String(times[i]).match(/^\d{4}-(\d{2})-(\d{2})/); if(!m)continue;
+    const dd=Date.UTC(2000,+m[1]-1,+m[2]);
+    let diff=Math.abs(dd-center)/864e5;
+    diff=Math.min(diff,366-diff);                      // 年首尾环绕(12-31↔01-01)
+    if(diff>3)continue;
+    if(TX[i]!=null)tmax.push(TX[i]);
+    if(TN[i]!=null)tmin.push(TN[i]);
+    if(WC[i]!=null)codes.push(WC[i]);
+    if(PR[i]!=null){tot++;if(PR[i]>=1)rain++;}          // 雨日率必须用降水量阈值,非历史概率
+  }
+  if(!tmax.length||!tmin.length)return null;   // 两列都要有值,防 median([])=null 渲染成 0℃
+  return {e:wxEmoji(mode(codes)),wc:mode(codes),
+    tmin:median(tmin),tmax:median(tmax),
+    p20max:pct(tmax,20),p80max:pct(tmax,80),p20min:pct(tmin,20),p80min:pct(tmin,80),
+    rainPct:tot?Math.round(rain/tot*100):null,n:tmax.length,src:"clim"};
+}
+function climToView(c){return c&&{e:c.e,tmin:c.tmin,tmax:c.tmax,pop:c.rainPct,src:"clim",detail:c};}
+/* 气候法:对单个 0.1° 圆整坐标拉近 10 年 archive,聚合后存摘要。命中新鲜缓存即跳过网络 */
+async function fetchClim(latR,lngR,mmdd){
+  const key="wx.clim."+latR+","+lngR+"."+mmdd;
+  const hit=wxGet(key,CLIM_TTL);
+  if(hit&&!hit.stale)return {w:climToView(hit.data),badge:"clim"};
+  const tz=TRIP_TZ||"Europe/London";
+  const yE=new Date().getUTCFullYear()-1;              // archive 数据滞后,用去年作末年
+  const url="https://archive-api.open-meteo.com/v1/archive?latitude="+latR+"&longitude="+lngR+
+    "&start_date="+(yE-9)+"-01-01&end_date="+yE+"-12-31"+
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone="+encodeURIComponent(tz);
+  try{
+    const r=await fetchTO(url,null,12000);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    if(!j||!j.daily||j.error)throw new Error((j&&j.reason)||"archive 响应异常");
+    const agg=aggregateClim(j.daily,mmdd);
+    if(!agg)throw new Error("窗口内无样本");
+    wxSet(key,agg);
+    return {w:climToView(agg),badge:"clim"};
+  }catch(e){
+    if(hit)return {w:climToView(hit.data),badge:"cache"};   // 离线兜底:过期缓存优先于手写
+    return null;
+  }
+}
+/* 预报:整个行程去重坐标拼一串、一次多坐标调用;按入参顺序回填各坐标缓存。返回 {byKey} 命中表 */
+async function fetchForecastBatch(samples){
+  // samples: [{latR,lngR}] 去重后;先看缓存,缺新鲜的才发请求
+  const need=[], byKey={};
+  for(const s of samples){
+    const k=s.latR+","+s.lngR;
+    if(byKey[k])continue;
+    byKey[k]={latR:s.latR,lngR:s.lngR};
+  }
+  const keys=Object.keys(byKey);
+  const lats=keys.map(k=>byKey[k].latR), lngs=keys.map(k=>byKey[k].lngR);
+  // 显式 TRIP_TZ(而非 timezone=auto):令 dly.time 与 d.dateISO 同处行程时区,写键/读键对齐——跨时区行程也不会错配
+  const url="https://api.open-meteo.com/v1/forecast?latitude="+lats.join(",")+"&longitude="+lngs.join(",")+
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone="+encodeURIComponent(TRIP_TZ||"auto")+"&forecast_days=16";
+  try{
+    const r=await fetchTO(url,null,10000);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    let j=await r.json();
+    if(j&&j.error)throw new Error(j.reason||"forecast error");
+    const arr=Array.isArray(j)?j:[j];                  // 单坐标返回对象,多坐标返回数组
+    keys.forEach((k,i)=>{
+      const dly=arr[i]&&arr[i].daily; if(!dly||!dly.time)return;
+      const T=byKey[k], tx=dly.temperature_2m_max, tn=dly.temperature_2m_min;
+      dly.time.forEach((iso,ix)=>{
+        if(!tx||!tn||tx[ix]==null||tn[ix]==null)return;   // 窗口末端字段不齐 → 跳过,勿存 NaN℃
+        wxSet("wx.fc."+T.latR+","+T.lngR+","+iso,{
+          e:wxEmoji(dly.weather_code[ix]),wc:dly.weather_code[ix],
+          tmax:tx[ix],tmin:tn[ix],
+          pop:dly.precipitation_probability_max?dly.precipitation_probability_max[ix]:null,src:"fc"});
+      });
+    });
+  }catch(e){/* 失败静默:下方逐日读缓存,缺则各自走气候/手写兜底 */}
+}
+function fcView(d){return d&&{e:d.e,tmin:d.tmin,tmax:d.tmax,pop:d.pop,src:"fc",detail:d};}
+/* 取单日天气:命中新鲜预报缓存→预报;否则气候缓存→气候;过期缓存→兜底(标「·缓存」);全无→null(调用方回退手写)。
+   返回 {w, badge(标签文案), src, stale} —— src 决定徽标配色,stale 决定是否追加「·缓存」 */
+function readDayWx(di){
+  const d=TRIP.days[di], a=wxAnchor(di); if(!d.dateISO||!a)return null;
+  const latR=grid(a.lat), lngR=grid(a.lng);
+  const diff=daysFromToday(d.dateISO);
+  if(diff!=null&&diff>=0&&diff<=15){
+    const h=wxGet("wx.fc."+latR+","+lngR+","+d.dateISO,FC_TTL);
+    if(h)return {w:fcView(h.data),src:"fc",stale:h.stale,badge:"预报"+(h.stale?"·缓存":"")};
+  }
+  const hc=wxGet("wx.clim."+latR+","+lngR+"."+d.dateISO.slice(5).replace("-",""),CLIM_TTL);
+  if(hc)return {w:climToView(hc.data),src:"clim",stale:hc.stale,badge:"近10年同日"+(hc.stale?"·缓存":"")};
+  return null;
+}
+/* 异步主流程:并行拉满全行程自动值,逐日就地回填 DOM(view/loadSeq 令牌防串台,类似 updateDriveStats) */
+/* 并发限流池:thunks 为 ()=>Promise,最多 limit 个在飞;单个失败不拖垮整体 */
+async function runPool(thunks,limit){
+  const q=thunks.slice();
+  async function worker(){ for(;;){ const t=q.shift(); if(!t)return; try{await t();}catch(e){} } }
+  await Promise.all(Array.from({length:Math.max(1,Math.min(limit,thunks.length||1))},worker));
+}
+async function loadWeather(){
+  if(!TRIP||!TRIP.days.length)return;
+  const myLoad=loadSeq, myId=TRIP_ID;
+  const fcSamples=[], climJobs=[];
+  for(let di=0;di<TRIP.days.length;di++){
+    const d=TRIP.days[di], a=wxAnchor(di); if(!d.dateISO||!a)continue;
+    const latR=grid(a.lat), lngR=grid(a.lng), diff=daysFromToday(d.dateISO);
+    if(diff!=null&&diff>=0&&diff<=15){
+      const h=wxGet("wx.fc."+latR+","+lngR+","+d.dateISO,FC_TTL);
+      if(!h||h.stale)fcSamples.push({latR,lngR});
+    }else{
+      const mmdd=d.dateISO.slice(5).replace("-","");
+      const h=wxGet("wx.clim."+latR+","+lngR+"."+mmdd,CLIM_TTL);
+      if(!h||h.stale)climJobs.push({latR,lngR,mmdd});
+    }
+  }
+  const jobs=[];
+  if(fcSamples.length)jobs.push(()=>fetchForecastBatch(fcSamples));   // 全行程预报一次多坐标调用
+  const climSeen={};                                              // 同 0.1° 格 + 同 mmdd 去重,各发一次
+  for(const c of climJobs){const k=c.latR+","+c.lngR+"."+c.mmdd;if(climSeen[k])continue;climSeen[k]=1;
+    jobs.push(()=>fetchClim(c.latR,c.lngR,c.mmdd));}   // 每个气候格 ~99KB archive 调用,限流避免一把梭打满
+  try{await runPool(jobs,4);}catch(e){}
+  if(TRIP_ID!==myId||loadSeq!==myLoad)return;                     // 期间切了行程/导入:作废,不回填旧 DOM
+  fillWeatherDOM();
+}
+/* 当日 .dmeta 天气串(自动值优先,无则手写均值,全无则空)。返回 {inner, clim} 供 wxSpan/回填共用 */
+function dayWxInner(di){
+  const d=TRIP.days[di], r=readDayWx(di);
+  if(r&&r.w)return {inner:wxFill(esc(wxStr(r.w)),r.badge,r.src,r.w),clim:r.src==="clim"};
+  if(d.wx)return {inner:esc(d.wx)+'<span class="wx-bd wx-bd-hw">手写均值</span>',clim:false};   // 全无自动值 → 手写均值兜底
+  return {inner:"",clim:false};
+}
+/* 把当前 view 下天气占位就地替换为自动值:日视图 [data-wx] 全串带徽标、总览 [data-wxc] 只 emoji+温度 */
+function fillWeatherDOM(){
+  if(!TRIP)return;
+  document.querySelectorAll("#content [data-wx]").forEach(el=>{
+    const di=+el.getAttribute("data-wx"); if(isNaN(di)||!TRIP.days[di])return;
+    const w=dayWxInner(di);
+    if(w.inner){el.innerHTML=w.inner;el.classList.toggle("wx-clim",w.clim);}
+  });
+  document.querySelectorAll("#content [data-wxc]").forEach(el=>{
+    const di=+el.getAttribute("data-wxc"); if(isNaN(di)||!TRIP.days[di])return;
+    const r=readDayWx(di);
+    if(r&&r.w)el.textContent=r.w.e+" "+Math.round(r.w.tmin)+"–"+Math.round(r.w.tmax)+"℃";
+  });
+}
+/* 拼展示串 + 来源徽标;气候徽标挂 P20–P80 区间详情(title,可点开看) */
+function wxFill(str,badge,src,w){
+  let h=str;
+  if(badge){
+    let title="";
+    if(src==="clim"&&w&&w.detail){const c=w.detail;
+      title="最高温 "+Math.round(c.p20max)+"–"+Math.round(c.p80max)+"℃,最低温 "+Math.round(c.p20min)+"–"+Math.round(c.p80min)+
+        "℃,"+(c.rainPct!=null?Math.round(c.rainPct/10)+" 成年份当天有雨":"")+"(近 10 年同日 ±3 天 "+c.n+" 样本)";}
+    h+='<span class="wx-bd wx-bd-'+src+'"'+(title?' title="'+esc(title)+'"':"")+">"+esc(badge)+"</span>";
+  }
+  return h;
+}
+/* dayHtml 用:.dmeta 内当日天气 <span>。首屏同步直出(命中缓存→自动值,否则手写),data-wx 供 loadWeather 回填 */
+function wxSpan(di){
+  const d=TRIP.days[di], w=dayWxInner(di);
+  if(!w.inner&&!d.dateISO)return "";   // 无 dateISO 又无手写 → 不占位
+  return '<span data-wx="'+di+'" class="wxslot'+(w.clim?" wx-clim":"")+'">'+w.inner+"</span>";
+}
+/* ovHtml 用:总览日卡右上角 emoji+温度(去徽标、省降水,一眼看全程)。data-wxc 供回填 */
+function wxChip(di){
+  const r=readDayWx(di), d=TRIP.days[di];
+  let inner="";
+  if(r&&r.w)inner=esc(r.w.e+" "+Math.round(r.w.tmin)+"–"+Math.round(r.w.tmax)+"℃");
+  else if(d.wx){const m=String(d.wx).match(/^\s*(\S+)?\s*([\d.]+\s*[–\-~]\s*[\d.]+℃)/);
+    inner=m?esc((m[1]||"")+" "+m[2]):"";}    // 手写串里抽 emoji+温度
+  if(!inner)return "";
+  return '<span class="wx" data-wxc="'+di+'">'+inner+"</span>";
+}
+/* P16 日况(Day Brief)三联:天气 · 日出日落 · 驾驶里程时间。总览卡与日视图头共用。
+   live=true(仅当前日视图)给驾驶挂 #drv-auto + ↻,OSRM 算完由 updateDriveStats 回填;天气用 data-wxc 占位,fillWeatherDOM 回填。 */
+function dayBriefHtml(di,live){
+  const d=TRIP.days[di];
+  const r=readDayWx(di);
+  let wx="";
+  if(r&&r.w)wx=esc(r.w.e+" "+Math.round(r.w.tmin)+"–"+Math.round(r.w.tmax)+"℃");
+  else if(d.wx){const m=String(d.wx).match(/^\s*(\S+)?\s*([\d.]+\s*[–\-~]\s*[\d.]+℃)/);wx=m?esc((m[1]||"")+" "+m[2]):"";}
+  const sun=sunRow(di).html;                 // "<span>🌅 hh / hh</span>" 或 ""
+  const drv=esc(briefDrive(di));
+  let h='<div class="daybrief">';
+  if(wx||d.dateISO)h+='<span class="db-c db-wx"><span data-wxc="'+di+'">'+wx+'</span></span>';
+  if(sun)h+='<span class="db-c">'+sun+'</span>';
+  if(drv||live)h+='<span class="db-c db-drv">🚗 <span'+(live?' id="drv-auto"':'')+'>'+(drv||"—")+'</span>'+
+    (live?'<button id="redrv" title="重新算路(清当日缓存)">↻</button>':'')+'</span>';
+  h+='</div>';
+  return h;
+}
+
+/* ---------- Google 模式 ---------- */
+const gframe=$("#gframe");
+let gsrc="";
+function gset(u){ if(u&&u!==gsrc){gsrc=u;gframe.src=u;} }
+function gPlace(lat,lng){return "https://maps.google.com/maps?q="+lat+","+lng+"&z=14&hl=zh-CN&output=embed";}
+function gDir(pts){
+  if(pts.length<2)return pts.length?gPlace(pts[0].lat,pts[0].lng):"";
+  return "https://maps.google.com/maps?saddr="+pts[0].lat+","+pts[0].lng+
+    "&daddr="+pts.slice(1).map(p=>p.lat+","+p.lng).join("+to:")+"&hl=zh-CN&dirflg=d&output=embed";
+}
+function gNav(pts){return "https://www.google.com/maps/dir/"+pts.map(p=>p.lat+","+p.lng).join("/");}
+function gViewUrl(){
+  if(!TRIP)return "";
+  if(view==="OV"){
+    const ov=[];const first=dayPoints(TRIP.days[0])[0];if(first)ov.push(first);
+    TRIP.days.forEach(d=>{const p=dayPoints(d);if(p.length)ov.push(p[p.length-1]);});
+    return gDir(ov);
+  }
+  const di=TRIP.days.findIndex(d=>d.id===view);
+  const pts=dayPoints(TRIP.days[di]).slice();
+  const pv=prevStayPoint(di); if(pv)pts.unshift(pv);
+  return gDir(pts);
+}
+function setGmode(on,persist=true){
+  if(on&&navigator.onLine===false){on=false;persist=false;}   // 断网强制退回标点图:不写偏好,联网后仍恢复用户原选择
+  gmode=on;
+  gframe.style.display=on?"block":"none";
+  $("#gback").style.display=on?"block":"none";
+  $("#mb-g").classList.toggle("on",on);
+  $("#mb-osm").classList.toggle("on",!on);
+  if(persist)gstore.set("gmode",on);   // 仅用户主动切换才落盘;离线强制态不覆盖偏好
+  if(on)gset(gViewUrl());
+}
+$("#mb-osm").onclick=()=>setGmode(false);
+$("#mb-g").onclick=()=>setGmode(true);
+$("#gback").onclick=()=>gset(gViewUrl());
+
+/* P4.4d 离线感知:Google 嵌入模式依赖 maps.google.com,断网不可达 → 隐藏入口;
+   若正处 gmode 则退回标点图。在线恢复后还原按钮。瓦片不可达本身只是灰底,不强制退出标点图。 */
+function syncGmodeOnline(){
+  const online=navigator.onLine!==false;     // 缺省/true 视为在线
+  $("#mb-g").style.display=online?"":"none";
+  if(!online){
+    $("#gback").style.display="none";
+    if(gmode)setGmode(false,false);          // 断网中若在 Google 模式,退回标点图(强制态,不覆盖偏好)
+  }
+}
+window.addEventListener("online",syncGmodeOnline);
+window.addEventListener("offline",syncGmodeOnline);
+syncGmodeOnline();                            // 首帧按当前网络态决定 Google 入口可见性
+
+/* ---------- 面板 ---------- */
+function chipsHtml(){
+  let h='<button data-v="OV"'+(view==="OV"?' class="on"':'')+'>总览</button>';
+  TRIP.days.forEach((d,i)=>{const col=dayColor(i,d.id);
+    h+='<button data-v="'+d.id+'"'+(view===d.id?' class="on"':'')+
+    ' style="'+(view===d.id?'background:'+col+';border-color:'+col+';':'border-color:'+col+';color:'+col)+'">'+
+    d.id+"<small>"+esc(d.date)+"</small>"+(dirtyDays.has(d.id)?'<span class="chip-dot"></span>':"")+"</button>";});
+  return h;
+}
+/* P10.2 移动端合并导航:天 chips(总览+D1..Dn)与功能 tab(清单/须知/网址)合成一条横滚。复用 setTab/setView */
+function navHtml(){
+  let h='<button data-v="OV"'+(tab==="trip"&&view==="OV"?' class="on"':'')+'>总览</button>';
+  TRIP.days.forEach((d,i)=>{const col=dayColor(i,d.id), on=tab==="trip"&&view===d.id;
+    h+='<button data-v="'+d.id+'"'+(on?' class="on"':'')+
+    ' style="'+(on?'background:'+col+';border-color:'+col+';':'border-color:'+col+';color:'+col)+'">'+
+    d.id+"<small>"+esc(d.date)+"</small>"+(dirtyDays.has(d.id)?'<span class="chip-dot"></span>':"")+"</button>";});
+  const wN=allWarnings().length;
+  h+='<button class="tabchip'+(tab==="ck"?" on":"")+'" data-tab="ck">清单</button>';
+  h+='<button class="tabchip'+(tab==="nt"?" on":"")+'" data-tab="nt">须知'+(wN?'<span class="tbadge">'+wN+"</span>":"")+"</button>";
+  h+='<button class="tabchip'+(tab==="lk"?" on":"")+'" data-tab="lk">网址</button>';
+  return h;
+}
+function ovHtml(){
+  const m=TRIP.meta;
+  let h='<div class="ovbox">'+esc(m.sub||"");
+  if(m.budget||m.fx)h+='<details class="ovbudget"><summary>💰 预算 / 汇率</summary>'+
+    (m.budget?'<div>'+esc(m.budget)+'</div>':"")+
+    (m.fx?'<div class="ovfx">'+esc(m.fx)+(m.updated?" · "+esc(m.updated):"")+'</div>':"")+'</details>';
+  h+="</div>";
+  TRIP.days.forEach((d,i)=>{
+    h+='<div class="dcard" data-v="'+d.id+'"><span class="dn" style="background:'+dayColor(i,d.id)+'">'+d.id+"</span><span><b>"+
+      esc(d.date)+" "+esc(d.week||d.weekdayCalc)+" · "+esc(d.title)+"</b>"+dayBriefHtml(i,false)+"</span></div>";   // 日况三联(天气异步回填见 loadWeather)
+  });
+  return h;
+}
+function dayHtml(d){
+  const di=TRIP.days.findIndex(x=>x.id===d.id);
+  let h='';
+  if(d.route)h+='<div class="droute">'+esc(d.route)+'</div>';   // 当日一行总览(路线概述)
+  h+=dayBriefHtml(di,true);                                     // 日况:天气·日出日落·实测驾驶(含 #drv-auto/↻)
+  h+='<ul class="tl">';
+  // P4.6 行中模式:今天(按 trip 时区)的日视图,在最接近当前时刻的两条目之间画「— 现在 HH:MM —」线
+  let nowMin=-1,nowLi="",nowDone=false;
+  if(d.dateISO&&daysFromToday(d.dateISO)===0){
+    const ns=nowHHMM(), nm=String(ns).match(/^(\d{1,2}):(\d{2})$/);
+    if(nm){nowMin=+nm[1]*60+ +nm[2];nowLi='<li class="tlnow"><span class="nl">— 现在 '+esc(ns)+' —</span></li>';}
+  }
+  let n=0;
+  d.items.forEach((it,ix)=>{
+    const hasPt=it.lat!=null; if(hasPt)n++;
+    const dot=hasPt?'<span class="dot'+(it.stay?" stay":"")+'">'+n+"</span>":'<span class="emo">'+esc(it.e)+"</span>";
+    let badge="";   // 2.4:按 HH:MM 算太阳高度,golden hour→📸 / 日落后→🌙(纯展示)
+    const tm=String(it.t||"").match(/^(\d{1,2}):(\d{2})$/);
+    if(tm){const b=sunBadge(di,+tm[1],+tm[2]); if(b)badge='<span class="sun-b" title="'+(b==="📸"?"黄金时刻 光线好":"日落后 / 日出前")+'">'+b+"</span>";}
+    if(nowMin>=0&&!nowDone&&tm&&(+tm[1]*60+ +tm[2])>nowMin){h+=nowLi;nowDone=true;}
+    if(editMode)h+='<li class="ins"><button class="insb" data-eact="ins" data-at="'+ix+'">＋ 插入</button></li>';
+    h+='<li data-ix="'+ix+'"'+(hasPt?' class="pt" data-n="'+(n-1)+'"':'')+'><span class="t">'+esc(it.t)+"</span>"+dot+
+      "<span><div class=\"w\">"+(hasPt?esc(it.e)+" ":"")+esc(it.w)+badge+
+      (it.url?'<a class="lk" target="_blank" rel="noopener" href="'+esc(/^https?:\/\//i.test(it.url)?it.url:"#")+'">↗</a>':"")+
+      ectlHtml(ix,d.items.length)+"</div>"+
+      (it.note?'<div class="n">'+mdInline(it.note)+"</div>":"")+"</span></li>";
+  });
+  if(nowMin>=0&&!nowDone)h+=nowLi;   // 当前时刻晚于全部条目 → 线落在时间轴末尾
+  if(editMode)h+='<li class="ins"><button class="insb" data-eact="ins" data-at="'+d.items.length+'">＋ 插入</button></li>';
+  h+="</ul>";
+  if(d.stay){
+    h+='<div class="staycard"'+(d.stay.lat!=null?' data-n="'+n+'"':'')+'><span class="ic">🏨</span><span><b>'+esc(d.stay.h)+"</b>"+
+      (d.stay.p?'<span class="p">'+esc(d.stay.p)+"</span>":"")+
+      '<span class="ectl"><button data-eact="stay-edit" title="编辑住宿">✎</button><button data-eact="stay-del" title="删除住宿">🗑</button></span>'+
+      (d.stay.note?'<div class="sn">⚠ '+mdInline(d.stay.note)+"</div>":"")+"</span></div>";
+  }else if(editMode){
+    h+='<button class="insb" data-eact="stay-add">＋ 添加住宿</button>';
+  }
+  const pts=dayPoints(d).slice(); const pv=prevStayPoint(di); if(pv)pts.unshift(pv);
+  if(pts.length>1)h+='<div class="dbtns"><a target="_blank" rel="noopener" href="'+gNav(pts)+'">📍 Google Maps 导航</a><button id="gemb">🗺 本日路线嵌入图</button></div>';
+  return h;
+}
+function ckHtml(){
+  const st=store.get("ck",{});
+  let h='<ul class="ck">';
+  TRIP.checklist.forEach((c,i)=>{
+    const on=!!st[i];
+    h+='<li'+(on?' class="done"':'')+'><input type="checkbox" data-i="'+i+'"'+(on?" checked":"")+"><span><b>"+
+      mdInline(c.t)+"</b>"+(c.n?'<div class="cn">'+mdInline(c.n)+"</div>":"")+"</span></li>";
+  });
+  return h+"</ul>";
+}
+function ntHtml(){
+  let h="";
+  const W=allWarnings();
+  if(W.length)h+='<div class="lintbar" id="lintbar">⚠ '+W.length+' 条体检提示<span class="arr">▾</span></div>'+
+    '<ul class="lintlist" id="lintlist">'+W.map(w=>"<li>"+esc(w)+"</li>").join("")+"</ul>";
+  return h+'<ul class="nt">'+TRIP.notes.map(x=>"<li>"+mdInline(x)+"</li>").join("")+"</ul>";
+}
+function lkHtml(){
+  let h='<div class="lkg">';
+  TRIP.linkGroups.forEach(g=>{
+    h+="<h3>"+esc(g.name)+"</h3>";
+    g.items.forEach(it=>{h+='<div class="li">'+
+      (/^https?:\/\//i.test(it.u)?'<a target="_blank" rel="noopener" href="'+esc(it.u)+'">'+esc(it.t)+" ↗</a>"
+        :"<b>"+esc(it.t)+"</b><span style=\"color:var(--mut)\">（非 http(s) 链接，已禁用）</span>")+
+      (it.n?'<div class="n">'+mdInline(it.n)+"</div>":"")+"</div>";});
+  });
+  return h+"</div>";
+}
+let _panelKey="";   // 上次渲染的 tab|view:相同(编辑事务/开关重绘)则保留滚动位置,回顶只发生在真正切 tab/切天
+function renderPanel(){
+  if(!TRIP)return;
+  const m=TRIP.meta;
+  $("#t-title").textContent=m.title||"路书";
+  $("#t-range").textContent=m.range||"";
+  $("#t-in").textContent=m.inFlight?"🛬 "+m.inFlight:"";
+  $("#t-out").textContent=m.outFlight?"🛫 "+m.outFlight:"";
+  $("#chips").style.display=tab==="trip"?"flex":"none";
+  $("#chips").innerHTML=chipsHtml();
+  // block:"nearest" 防止页面纵向跳动;每次重绘幂等执行
+  const onChip=document.querySelector("#chips button.on");
+  if(onChip)onChip.scrollIntoView({inline:"center",block:"nearest"});
+  const mn=$("#mnav");   // P10.2 移动端合并导航(桌面隐藏,内容仍维护)
+  if(mn){mn.innerHTML=navHtml();const onm=mn.querySelector("button.on");if(onm)onm.scrollIntoView({inline:"center",block:"nearest"});}
+  document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===tab));
+  const wN=allWarnings().length;
+  const ntBtn=document.querySelector('#tabs button[data-tab="nt"]');
+  if(ntBtn)ntBtn.innerHTML="须知"+(wN?'<span class="tbadge">'+wN+"</span>":"");
+  const c=$("#content");
+  const key=tab+"|"+(tab==="trip"?view:"");
+  const keep=key===_panelKey?c.scrollTop:0;   // 同页重绘(编辑↑↓/删除/固化等)恢复滚动,防面板跳顶致连击误点错位控件
+  if(tab==="ck")c.innerHTML=ckHtml();
+  else if(tab==="nt")c.innerHTML=ntHtml();
+  else if(tab==="lk")c.innerHTML=lkHtml();
+  else c.innerHTML=view==="OV"?ovHtml():dayHtml(TRIP.days.find(d=>d.id===view));
+  c.scrollTop=keep;
+  _panelKey=key;
+  const ge=$("#gemb"); if(ge)ge.onclick=()=>{setGmode(true);};
+  const rd=$("#redrv");
+  if(rd)rd.onclick=()=>{
+    const di=TRIP.days.findIndex(d=>d.id===view); if(di<0)return;
+    for(const seg of routeChain(di))if(!seg.sea)gstore.del(osrmKey(seg.pts.map(p=>[p.lat,p.lng])));
+    const el=$("#drv-auto"); if(el)el.textContent="计算中…";
+    renderMap();
+  };
+}
+function setView(v){
+  view=v;activeIdx=-1;
+  clearSunAnchor();   // 切天:临时锚失效,回自动晨/晚锚(随后 renderMap→drawSun 按自动锚重画)
+  dirtyDays.delete(v);   // 3.4:用户切到该天即视为已复查,清 chip 红点
+  _flyNext=true;   // P18 用户切视图 → 下一次 fitB 平滑飞行(仅此路径;编辑/预热等重绘不飞)
+  renderPanel();renderMap();fillWeatherDOM();   // 新 DOM 立即用缓存填(在飞请求结算后会再填一次)
+  if(sunMode)$("#sunbar").classList.toggle("on",view!=="OV");   // 总览无单日锚点,收起滑杆
+  if(gmode)gset(gViewUrl());
+}
+function setTab(t){tab=t;renderPanel();fillWeatherDOM();}
+
+$("#tabs").addEventListener("click",e=>{const b=e.target.closest("button");if(b)setTab(b.dataset.tab);});
+$("#chips").addEventListener("click",e=>{const b=e.target.closest("button");if(b)setView(b.dataset.v);});
+$("#mnav").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;   // P10.2 合并导航分流:功能 tab→setTab,天→(切回 trip)setView
+  if(b.dataset.tab)setTab(b.dataset.tab);
+  else{if(tab!=="trip")tab="trip";setView(b.dataset.v);}});
+let _lpTimer=null,_lpFired=false;   // P17 长按计时 / 吞掉长按后浏览器补发的合成 click
+$("#content").addEventListener("click",e=>{
+  if(_lpFired){_lpFired=false;return;}   // 长按已开表单,吞随后的合成 click(防误触飞图)
+  if(e.target.closest("#lintbar")){const l=$("#lintlist");if(l)l.classList.toggle("open");return;}
+  // P16 备注收起/展开:点已截断(或已展开)的备注切换,不触发飞图/编辑(链接点击照常)
+  const _note=e.target.closest(".tl .n");
+  if(_note&&!e.target.closest("a")&&(_note.classList.contains("exp")||_note.scrollHeight>_note.clientHeight+1)){_note.classList.toggle("exp");return;}
+  const eb=e.target.closest("[data-eact]");
+  if(eb){editAct(eb);return;}
+  const card=e.target.closest(".dcard");
+  if(card){setView(card.dataset.v);return;}
+  if(e.target.closest("a")||e.target.tagName==="INPUT"||e.target.closest("#gemb"))return void 0;
+  const li=e.target.closest("[data-n]");
+  if(li){
+    const n=+li.dataset.n;
+    document.querySelectorAll("#content .act").forEach(x=>x.classList.remove("act"));
+    li.classList.add("act");
+    const mk=dayMarkers[n];
+    if(gmode&&mk){const ll=mk.getLatLng();gset(gPlace(ll.lat,ll.lng));}
+    else if(mk){map.flyTo(mk.getLatLng(),13.5,{duration:.7});mk.openPopup();}
+    // ☀️ 临时锚:点带坐标条目叠加迁锚(flyTo/高亮原行为保持);名称从 dayPoints 取,与 dayMarkers 同序
+    if(sunMode&&mk){
+      const d=TRIP.days.find(x=>x.id===view), p=d?dayPoints(d)[n]:null;
+      if(p)setSunAnchor({lat:p.lat,lng:p.lng,name:p.name});
+    }
+  }
+});
+/* P17 移动端:长按条目/住宿 → 编辑表单(替代已取消的双击;桌面用 hover ✎)。滚动/移动即取消;长按命中后吞合成 click */
+$("#content").addEventListener("touchstart",e=>{
+  const el=e.target.closest("li[data-ix],.staycard");
+  if(!el||e.target.closest("a,button,input"))return;
+  clearTimeout(_lpTimer);_lpFired=false;
+  _lpTimer=setTimeout(()=>{
+    _lpTimer=null;_lpFired=true;
+    const di=TRIP?TRIP.days.findIndex(d=>d.id===view):-1; if(di<0)return;
+    if(el.classList.contains("staycard"))openForm({kind:"stay",di});
+    else openForm({kind:"item",di,ix:+el.dataset.ix});
+    if(navigator.vibrate)try{navigator.vibrate(10);}catch(_){ }
+  },500);
+},{passive:true});
+(function(){const c=()=>{if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null;}};
+  $("#content").addEventListener("touchmove",c,{passive:true});
+  $("#content").addEventListener("touchend",c);
+  $("#content").addEventListener("touchcancel",c);})();
+$("#content").addEventListener("change",e=>{
+  if(e.target.matches('input[type="checkbox"]')){
+    const st=store.get("ck",{});st[e.target.dataset.i]=e.target.checked;store.set("ck",st);
+    e.target.closest("li").classList.toggle("done",e.target.checked);
+  }
+});
+$("#fold").onclick=()=>{$("#panel").classList.toggle("min");
+  $("#fold").textContent=$("#panel").classList.contains("min")?"▸":"▾";};
+
+/* P4.6 行中模式:当天日视图每分钟重绘,推进「— 现在 —」线(页面可见、无表单/固化弹层时;renderPanel 保滚动位) */
+setInterval(()=>{
+  if(document.hidden||!TRIP||tab!=="trip"||view==="OV")return;
+  if(EF||$("#cform").classList.contains("on"))return;
+  const d=TRIP.days.find(x=>x.id===view);
+  if(d&&d.dateISO&&daysFromToday(d.dateISO)===0){renderPanel();fillWeatherDOM();}
+},60000);
+
+/* ---------- 导入 / 导出 ---------- */
+function toast(s){const b=$("#badge");b.textContent=s;b.style.display="block";clearTimeout(b._t);b._t=setTimeout(()=>b.style.display="none",4200);}
+function exportMd(name){
+  const blob=new Blob([SRC],{type:"text/markdown;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download=name||((TRIP&&TRIP.meta.title?TRIP.meta.title:"trip")+"-行程.md");a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+$("#exp").onclick=()=>exportMd();
+$("#imp").onclick=()=>$("#mdfile").click();
+
+/* ---------- P4.5「⚡ 预热」:出发前一晚点一次,遍历全部天落本地缓存(OSRM 算路 + 天气),不含瓦片 ----------
+   - OSRM:对每天 routeChain 的陆地段调 osrm()(永久缓存 gstore.osrm2.*);命中缓存即跳过网络。
+   - 天气:复用 loadWeather() —— 全程预报一次多坐标 + 气候按 0.1° 格去重各一次,已新鲜的跳过。
+   - 并发限流:OSRM 段最多 3 个在飞(OSRM demo 单机限速,几十段一次性打会 429);失败的段跳过不阻断。
+   - 进度:toast 报「预热 3/9…」;完成提示算路成功段数 + 天气状态。瓦片一律不碰(规格硬要求)。 */
+let warming=false;
+async function runWarmup(){
+  if(warming)return;
+  if(!TRIP||!TRIP.days.length){toast("没有可预热的行程");return;}
+  if(navigator.onLine===false){toast("当前离线,无法预热;联网后再点");return;}
+  warming=true;
+  const btn=$("#warmup"); if(btn){btn.disabled=true;btn.textContent="⏳ 预热中";}
+  const myId=TRIP_ID, myLoad=loadSeq;
+  const aborted=()=>TRIP_ID!==myId||loadSeq!==myLoad;   // 预热中切了行程/导入 → 中止,不污染新行程提示
+  try{
+    // ① 收集全程陆地路段(去重坐标链),逐段算路并限流
+    const segKeys=new Set(), segs=[];
+    for(let di=0;di<TRIP.days.length;di++){
+      for(const seg of routeChain(di)){
+        if(seg.sea||seg.pts.length<2)continue;
+        const coords=seg.pts.map(p=>[p.lat,p.lng]);
+        const k=osrmKey(coords);
+        if(segKeys.has(k))continue;            // 同段路跨日只算一次(键=坐标链)
+        segKeys.add(k); segs.push(coords);
+      }
+    }
+    const total=segs.length;
+    let done=0, okN=0, failN=0;
+    const CONC=3, queue=segs.slice();
+    async function worker(){
+      while(queue.length){
+        if(aborted())return;
+        const coords=queue.shift();
+        try{const r=await osrm(coords); if(r&&r.geo)okN++; else failN++;}   // 失败跳过不阻断
+        catch(e){failN++;}
+        done++;
+        if(!aborted()&&total)toast("预热 "+done+"/"+total+"… 算路");
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(CONC,total||1)},worker));
+    if(aborted())return;
+    // ② 重画当前日路线(新缓存几何可即时上图)+ 刷新当前日驾驶实测里程
+    renderMap();
+    const cdi=TRIP.days.findIndex(d=>d.id===view); if(cdi>=0)updateDriveStats(cdi);
+    // ③ 天气:复用 loadWeather 全程批量落缓存(预报一次多坐标 + 气候去重)
+    if(!aborted())toast("预热 天气…");
+    try{await loadWeather();}catch(e){}
+    if(aborted())return;
+    const seaNote=total?"":"(全程无陆地路段)";
+    toast("预热完成:算路 "+okN+"/"+total+" 段"+(failN?"("+failN+" 段失败,可联网重试)":"")+seaNote+",天气已落缓存");
+  }finally{
+    warming=false;
+    if(btn){btn.disabled=false;btn.textContent="⚡ 预热";}
+  }
+}
+$("#warmup").onclick=runWarmup;
+
+/* ---------- P12 10km 走廊离线地图:同源 GeoJSON 小包,不抓/缓存公共瓦片 ---------- */
+const MAP_CACHE="ukmd-map-v1";
+const MAP_MANIFEST="./offline-map/manifest.json";
+let offlineMapManifest=null,offlineMapLayer=null,offlineMapCached=false,offlineMapDownloading=false,offlineMapForced=false,tileFailN=0,offlineMapAttribution="";
+function fmtBytes(n){
+  n=Number(n)||0;
+  if(n>=1024*1024)return (n/1024/1024).toFixed(n>=10*1024*1024?0:1)+"MB";
+  if(n>=1024)return Math.round(n/1024)+"KB";
+  return n+"B";
+}
+function offlineMapFiles(m){
+  return (m&&Array.isArray(m.files)?m.files:[]).filter(f=>f&&f.path&&f.bytes>=0);
+}
+function offlineMapBytes(m){
+  return offlineMapFiles(m).reduce((n,f)=>n+(Number(f.bytes)||0),0);
+}
+async function mapCache(){
+  if(!("caches" in window))throw new Error("浏览器不支持 Cache API");
+  return caches.open(MAP_CACHE);
+}
+async function cachedMapManifest(){
+  try{
+    const c=await mapCache();
+    const r=await c.match(MAP_MANIFEST);
+    return r?await r.json():null;
+  }catch(e){return null;}
+}
+async function liveMapManifest(){
+  const r=await fetchTO(MAP_MANIFEST,{cache:"no-store"},5000);
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  return r.json();
+}
+async function updateOfflineMapButtons(){
+  const b=$("#omap"),x=$("#omapclear"); if(!b)return;
+  let live=null,cached=null;
+  try{live=await liveMapManifest();}catch(e){}
+  cached=await cachedMapManifest();
+  offlineMapManifest=live||cached;
+  offlineMapCached=!!cached;
+  b.hidden=!offlineMapManifest;
+  b.disabled=offlineMapDownloading;
+  const visible=offlineMapLayer&&map.hasLayer(offlineMapLayer);
+  b.textContent=offlineMapDownloading?"⏳ 地图中":(offlineMapCached?(visible?"🗺 隐藏地图":"🗺 离线图"):"🗺 下载地图");
+  if(x)x.hidden=!offlineMapCached;
+}
+function offlineMapStyle(f){
+  const p=f.properties||{};
+  if(p.layer==="corridor")return {pane:"offlinePane",color:"#D7D7C8",weight:.5,opacity:.35,fillColor:"#EDE8D8",fillOpacity:.28};
+  if(p.layer==="route_line")return {pane:"offlinePane",color:p.sea?"#4A86B8":(p.color||"#8A6F3D"),weight:p.sea?1.3:1.6,opacity:.62,dashArray:p.sea?"3 5":null};
+  return {pane:"offlinePane",color:"#8A9A8D",weight:1,opacity:.45,fillOpacity:.1};
+}
+function offlineMapPoint(f,ll){
+  const p=f.properties||{},name=String(p.name||"").trim();
+  if(!name)return L.circleMarker(ll,{pane:"offlinePane",radius:2,weight:0,fillColor:"#64756A",fillOpacity:.5});
+  const cls=p.layer==="stay_label"?"omap-label stay":"omap-label";
+  return L.marker(ll,{pane:"offlinePane",interactive:false,icon:L.divIcon({className:"",iconSize:null,html:'<span class="'+cls+'">'+esc(name)+"</span>"})});
+}
+async function readMapGeojson(m){
+  const file=offlineMapFiles(m).find(f=>/\.geojson$/i.test(f.path));
+  if(!file)throw new Error("manifest 缺少 geojson 文件");
+  const c=await mapCache();
+  let r=await c.match(file.path);
+  if(!r&&navigator.onLine!==false)r=await fetchTO(file.path,{cache:"no-store"},12000);
+  if(!r||!r.ok)throw new Error("离线地图未下载");
+  return r.json();
+}
+function setOfflineMapVisible(on,forced){
+  if(!offlineMapLayer)return;
+  const before=map.hasLayer(offlineMapLayer);
+  if(typeof forced==="boolean")offlineMapForced=forced;
+  if(on&&!before)offlineMapLayer.addTo(map);
+  if(!on&&before)map.removeLayer(offlineMapLayer);
+  if(before!==map.hasLayer(offlineMapLayer)||typeof forced==="boolean")updateOfflineMapButtons();
+}
+async function loadOfflineMapLayer(show){
+  const m=offlineMapManifest||await cachedMapManifest();
+  if(!m)return false;
+  const geo=await readMapGeojson(m);
+  if(offlineMapLayer)offlineMapLayer.remove();
+  if(offlineMapAttribution)map.attributionControl.removeAttribution(offlineMapAttribution);
+  offlineMapLayer=L.geoJSON(geo,{pane:"offlinePane",style:offlineMapStyle,pointToLayer:offlineMapPoint});
+  offlineMapAttribution="离线走廊地图 "+(m.version||"");
+  map.attributionControl.addAttribution(offlineMapAttribution);
+  setOfflineMapVisible(!!show);
+  return true;
+}
+async function maybeShowOfflineMap(){
+  try{
+    const cached=await cachedMapManifest();
+    if(!cached)return false;
+    offlineMapManifest=cached;offlineMapCached=true;
+    await loadOfflineMapLayer(navigator.onLine===false||tileFailN>=4);
+    return true;
+  }catch(e){return false;}
+}
+async function downloadOfflineMap(){
+  if(offlineMapDownloading)return;
+  const b=$("#omap");
+  offlineMapDownloading=true;if(b){b.disabled=true;b.textContent="⏳ 地图中";}
+  try{
+    const r=await fetchTO(MAP_MANIFEST,{cache:"no-store"},8000);
+    if(!r.ok)throw new Error("manifest HTTP "+r.status);
+    const manifestText=await r.text();
+    const m=JSON.parse(manifestText);
+    const files=offlineMapFiles(m);
+    const total=offlineMapBytes(m);
+    const hard=Number(m.hardMaxBytes)||80*1024*1024;
+    if(!files.length)throw new Error("manifest 没有文件");
+    if(total>hard)throw new Error("离线地图 "+fmtBytes(total)+" 超过上限 "+fmtBytes(hard));
+    if(navigator.storage&&navigator.storage.estimate){
+      const est=await navigator.storage.estimate();
+      const quota=Number(est.quota)||0,usage=Number(est.usage)||0;
+      if(quota&&usage+total>quota*.85)throw new Error("浏览器剩余空间不足,需要 "+fmtBytes(total));
+    }
+    const c=await mapCache();
+    let done=0;
+    for(const f of files){
+      const fr=await fetchTO(f.path,{cache:"no-store"},30000);
+      if(!fr.ok)throw new Error(f.path+" HTTP "+fr.status);
+      const blob=await fr.blob();
+      if(f.bytes&&Math.abs(blob.size-f.bytes)>Math.max(2048,f.bytes*.02))throw new Error(f.path+" 大小不一致");
+      done+=blob.size;
+      if(done>hard)throw new Error("离线地图超过上限 "+fmtBytes(hard));
+      await c.put(f.path,new Response(blob,{headers:{"Content-Type":fr.headers.get("Content-Type")||"application/geo+json"}}));
+      toast("离线地图 "+fmtBytes(done)+"/"+fmtBytes(total));
+    }
+    await c.put(MAP_MANIFEST,new Response(manifestText,{headers:{"Content-Type":"application/json;charset=utf-8"}}));
+    offlineMapManifest=m;offlineMapCached=true;
+    await loadOfflineMapLayer(true);
+    offlineMapForced=true;
+    toast("离线地图已下载 "+fmtBytes(done)+" · 10km 走廊");
+  }catch(e){toast("离线地图失败:"+(e&&e.message||e));}
+  finally{offlineMapDownloading=false;await updateOfflineMapButtons();refreshOfflineStatus();}
+}
+async function clearOfflineMap(){
+  try{
+    if(!confirm("清除已下载的离线地图? 行程离线缓存不受影响。"))return;
+    if("caches" in window)await caches.delete(MAP_CACHE);
+    if(offlineMapLayer){offlineMapLayer.remove();offlineMapLayer=null;}
+    if(offlineMapAttribution){map.attributionControl.removeAttribution(offlineMapAttribution);offlineMapAttribution="";}
+    offlineMapCached=false;offlineMapManifest=null;offlineMapForced=false;tileFailN=0;
+    await updateOfflineMapButtons();refreshOfflineStatus();
+    toast("离线地图已清除");
+  }catch(e){toast("清除离线地图失败:"+(e&&e.message||e));}
+}
+async function toggleOfflineMapButton(){
+  if(!offlineMapCached){await downloadOfflineMap();return;}
+  try{
+    if(offlineMapLayer&&map.hasLayer(offlineMapLayer)){
+      setOfflineMapVisible(false,false);toast("已隐藏离线地图");
+    }else{
+      await loadOfflineMapLayer(true);offlineMapForced=true;toast("已显示离线地图");
+    }
+    refreshOfflineStatus();
+  }catch(e){toast("离线地图失败:"+(e&&e.message||e));}
+}
+async function offlineMapStatusText(){
+  if(location.protocol!=="http:"&&location.protocol!=="https:")return "";
+  const m=await cachedMapManifest();
+  if(m)return "地图 ✅ "+(m.bufferKm||10)+"km / "+fmtBytes(offlineMapBytes(m));
+  const live=offlineMapManifest||await liveMapManifest().catch(()=>null);
+  if(live)return "地图 ⚠ 未下载("+fmtBytes(offlineMapBytes(live))+")";
+  return "";
+}
+const omapBtn=$("#omap");if(omapBtn)omapBtn.onclick=toggleOfflineMapButton;
+const omapClearBtn=$("#omapclear");if(omapClearBtn)omapClearBtn.onclick=clearOfflineMap;
+cartoLayer.on("tileload",()=>{tileFailN=0;if(navigator.onLine!==false&&!offlineMapForced)setOfflineMapVisible(false);});
+cartoLayer.on("tileerror",()=>{tileFailN++;if(tileFailN>=4)maybeShowOfflineMap();});
+window.addEventListener("offline",()=>maybeShowOfflineMap().then(()=>refreshOfflineStatus()));
+window.addEventListener("online",()=>{tileFailN=0;if(!offlineMapForced)setOfflineMapVisible(false);refreshOfflineStatus();});
+updateOfflineMapButtons().then(()=>maybeShowOfflineMap()).then(()=>refreshOfflineStatus()).catch(()=>{});
+
+$("#mdfile").addEventListener("change",e=>{
+  const f=e.target.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{
+    let txt=String(r.result);
+    if(/String\.raw`/.test(txt))txt=txt.replace(/^[\s\S]*?String\.raw`\r?\n?/,"").replace(/`;?\s*$/,"");
+    try{
+      LS.del("ukmd.preview.ck");           // 预览空间一次性:勾选不带历史、不污染任何真实行程
+      LS.del("ukmd.preview.draft");        // 旧预览的编辑草稿同理作废,勿覆盖新导入内容
+      loadSeq++;                           // 作废所有在飞 loadTrip:晚结算的旧请求不得覆盖刚导入的预览
+      init(txt,"preview");                 // bump 须在 init 前:init 内 resolveTz 以 loadSeq 为令牌,后 bump 会误杀预览自己的时区解析
+      TRIP_FILE="";                        // 下拉点任意行程都触发真实重载,可退出预览态
+      fileHandle=null;                     // 连续导入 TRIP_ID 同为 preview,init 的换 id 作废逻辑不触发——显式作废,防「存回文件」把 b.md 内容写进先前选定的 a.md
+      $("#srcHint").textContent="数据：导入预览（未落盘）";
+      updateRepoSaveButton();refreshOfflineStatus();
+      toast("已加载「"+f.name+"」（仅本次预览；要长期生效请存回对应 .md / trip.data.js）");
+    }catch(err){toast("导入失败："+err.message);}
+  };
+  r.readAsText(f);e.target.value="";
+});
+
+/* ---------- 编辑器(P3.2–3.5) ----------
+   统一事务:mutate TRIP → serializeTrip → parseTrip → 以 T2 替换 TRIP、SRC=newMd → 草稿落 store(draft)
+   → 跨日派生起点对比(toast + chip 红点)→ renderPanel/renderMap/天气回填。warnings/dateISO 永远一致。 */
+let editMode=false, EF=null, pickHandler=null, qSeq=0, qTimer=null, lastNomTs=0;
+let _origTitle=null;   // 搜索选点覆盖标题前的原值(null=尚未覆盖)
+let ORIG_SRC="", draftActive=false;
+const dirtyDays=new Set();   // 起点已变待复查的天(chip 红点,切到该天即清)
+const COORD_RE=/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,，]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/;   // 粘贴坐标(支持全角逗号)
+const TIME_RE=/^([01]?\d|2[0-3]):[0-5]\d$/;
+const SEP_BAD=/[|｜]/;                                            // ｜ 是 MD 段分隔符,文本字段禁用
+const COORD_IN=/@\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?/;       // 文本里的「@纬,经」片段会被 parser 当坐标吃掉
+
+function updateSrcHint(){
+  const el=$("#srcHint");
+  const base=TRIPS?("数据："+TRIP_ID+".md"):"数据：trip.data.js（首尾两行勿动）";
+  if(draftActive)el.innerHTML='<span class="draft-badge">● 草稿</span> '+esc(base)+' <button id="dft-x">弃草稿</button>';
+  else el.textContent=base;
+  updateRepoSaveButton();refreshOfflineStatus();
+}
+function srcHintText(){
+  const raw=($("#srcHint").textContent||"").replace(/\s*弃草稿\s*$/,"").trim();
+  return raw.replace(/^●\s*草稿\s*/,"")||(TRIPS?("数据："+TRIP_ID+".md"):"数据：trip.data.js（首尾两行勿动）");
+}
+function discardDraft(){   // P10.3:#pfoot 的 dft-x 与动作单的 as-dft 共用
+  if(!confirm("弃用本地草稿,回到文件版本?"))return;
+  store.del("draft");
+  try{init(ORIG_SRC,TRIP_ID,{noDraft:true});toast("已弃草稿,回到文件版本");}
+  catch(err){toast("弃草稿失败:"+err.message);}
+}
+$("#pfoot").addEventListener("click",e=>{if(e.target.id==="dft-x")discardDraft();});
+
+function commitEdit(fn,okMsg){
+  if(!TRIP)return false;
+  const before=TRIP.days.map((d,i)=>prevStayPoint(i));   // 3.4:各天派生起点快照(编辑不增删天,索引对齐)
+  try{
+    fn(TRIP);
+    const md=serializeTrip(TRIP), T2=parseTrip(md);
+    if(!T2.days.length)throw new Error("序列化后解析不到行程日");
+    TRIP=T2;SRC=md;
+  }catch(e){
+    try{TRIP=parseTrip(SRC);}catch(_){}                  // 回滚:SRC 仍是上一次一致状态
+    toast("保存失败:"+e.message);return false;
+  }
+  store.set("draft",{md:SRC,ts:Date.now()});
+  draftActive=true;updateSrcHint();
+  const msgs=[];
+  TRIP.days.forEach((d,i)=>{
+    const o=before[i], p=prevStayPoint(i);
+    const same=(!o&&!p)||(o&&p&&Math.abs(o.lat-p.lat)<1e-9&&Math.abs(o.lng-p.lng)<1e-9&&o.name===p.name);
+    if(!same){msgs.push(d.id+" 起点已变:"+(o?o.name:"无")+" → "+(p?p.name:"无"));if(d.id!==view)dirtyDays.add(d.id);}
+  });
+  closeForm();
+  renderPanel();renderMap();fillWeatherDOM();
+  if(gmode)gset(gViewUrl());
+  loadWeather();                                          // 新坐标天气回填(loadSeq/TRIP_ID 令牌守卫)
+  const all=[okMsg].concat(msgs).filter(Boolean).join("；");
+  if(all)toast(all);
+  return true;
+}
+
+/* —— 3.2 编辑模式开关 + 行内控件 —— */
+function setEditMode(on){
+  editMode=on;
+  $("#edt").classList.toggle("on",on);
+  $("#content").classList.toggle("editing",on);
+  if(!on)closeForm();
+  renderPanel();fillWeatherDOM();
+}
+$("#edt").onclick=()=>setEditMode(!editMode);
+function ectlHtml(ix,len){
+  return '<span class="ectl"><button data-eact="edit" title="编辑">✎</button>'+
+    '<button data-eact="up" title="上移"'+(ix===0?" disabled":"")+'>↑</button>'+
+    '<button data-eact="down" title="下移"'+(ix===len-1?" disabled":"")+'>↓</button>'+
+    '<button data-eact="ins" data-at="'+(ix+1)+'" title="在此后插入">＋</button>'+
+    '<button data-eact="del" title="删除">🗑</button></span>';
+}
+function editAct(b){
+  if(!TRIP)return;
+  const di=TRIP.days.findIndex(d=>d.id===view); if(di<0)return;
+  const act=b.dataset.eact, d=TRIP.days[di];
+  if(act==="ins")return openForm({kind:"item",di,at:+b.dataset.at});
+  if(act==="stay-add"||act==="stay-edit")return openForm({kind:"stay",di});
+  if(act==="stay-del"){
+    if(!d.stay||!confirm("删除 "+d.id+" 住宿「"+(d.stay.h||"")+"」?"))return;
+    commitEdit(T=>{T.days[di].stay=null;},"已删除住宿");return;
+  }
+  const li=b.closest("[data-ix]"); if(!li)return;
+  const ix=+li.dataset.ix, it=d.items[ix]; if(!it)return;
+  if(act==="edit")return openForm({kind:"item",di,ix});
+  if(act==="del"){
+    if(!confirm("删除条目「"+it.t+" "+it.w+"」?"))return;
+    commitEdit(T=>{T.days[di].items.splice(ix,1);},"已删除");return;
+  }
+  if(act==="up"&&ix>0){if(commitEdit(T=>{const a=T.days[di].items,x=a[ix-1];a[ix-1]=a[ix];a[ix]=x;},"已上移"))hlMoved(ix-1);}
+  else if(act==="down"&&ix<d.items.length-1){if(commitEdit(T=>{const a=T.days[di].items,x=a[ix+1];a[ix+1]=a[ix];a[ix]=x;},"已下移"))hlMoved(ix+1);}
+}
+/* 移动后高亮落点:滚动保持下原屏幕位换成了相邻条目,高亮让「连击原位」的错位肉眼可见 */
+function hlMoved(ix){
+  document.querySelectorAll("#content .act").forEach(x=>x.classList.remove("act"));
+  const li=$("#content").querySelector('[data-ix="'+ix+'"]'); if(li)li.classList.add("act");
+}
+
+/* —— 3.3 条目/住宿表单(底部弹层) —— */
+function openForm(st){
+  closeCons();   // 双弹层互斥:openCons 会 closeForm,反向同样要关,防同 z-index 叠放且固化面板行项过期
+  EF=st;
+  const d=TRIP.days[st.di], isStay=st.kind==="stay";
+  $("#ef-row-te").style.display=isStay?"none":"flex";
+  $("#ef-row-p").style.display=isStay?"flex":"none";
+  $("#ef-row-url").style.display=isStay?"none":"flex";
+  $("#ef-w").placeholder=isStay?"住宿名称(必填)":"标题";
+  const isEditItem=!isStay&&st.ix!=null;
+  $("#ef-mv").style.display=isEditItem?"flex":"none";    // 3.5:仅编辑已有条目时提供跨天移动
+  if(isEditItem){
+    $("#ef-prev").disabled=st.di===0;                    // D1 无前移
+    $("#ef-next").disabled=st.di===TRIP.days.length-1;   // 末日无后移
+  }
+  $("#ef-del").style.display=(isEditItem||(isStay&&d.stay))?"":"none";   // P10.3 仅编辑已有条目/住宿才显示删除
+  let title, v={t:"",e:"",w:"",p:"",note:"",url:"",ll:""};
+  if(isStay){
+    const s=d.stay;
+    title=(s?"编辑住宿":"添加住宿")+" · "+d.id;
+    if(s)v={...v,w:s.h||"",p:s.p||"",note:s.note||"",ll:s.lat!=null?s.lat+", "+s.lng:""};
+  }else if(st.ix!=null){
+    const it=d.items[st.ix];
+    title="编辑条目 · "+d.id;
+    v={t:it.t||"",e:it.e||"",w:it.w||"",p:"",note:it.note||"",url:it.url||"",ll:it.lat!=null?it.lat+", "+it.lng:""};
+  }else title="插入条目 · "+d.id+"（第 "+(st.at+1)+" 位）";
+  $("#ef-title").textContent=title;
+  $("#ef-t").value=v.t;$("#ef-e").value=v.e;$("#ef-w").value=v.w;$("#ef-p").value=v.p;
+  $("#ef-note").value=v.note;$("#ef-url").value=v.url;$("#ef-ll").value=v.ll;
+  $("#ef-q").value="";$("#ef-err").textContent="";showRes([]);showDeg("");_clearRestoreBtn();
+  // emoji 快选行:住宿模式随 #ef-row-te 同步隐藏
+  const echipsRow=$("#ef-row-echips");
+  echipsRow.style.display=isStay?"none":"flex";
+  echipsRow.innerHTML="";
+  if(!isStay){
+    const FALLBACK=["📍","🏰","🥾","🍽","☕","🏨","⛴","🅿️","⛽","📸"];
+    // 统计全部 items 的 emoji 频次
+    const freq=new Map();
+    for(const day of TRIP.days)for(const it of day.items||[]){const e=it.e;if(e)freq.set(e,(freq.get(e)||0)+1);}
+    const byFreq=[...freq.entries()].sort((a,b)=>b[1]-a[1]).map(([e])=>e);
+    // 合并去重,高频优先,截断 12
+    const seen=new Set();
+    const chips=[];
+    for(const e of [...byFreq,...FALLBACK]){if(!seen.has(e)){seen.add(e);chips.push(e);}if(chips.length>=12)break;}
+    for(const e of chips){
+      const btn=document.createElement("button");
+      btn.type="button";btn.className="efec";
+      // textContent 赋值天然无 XSS,等同于 esc() 在 innerHTML 的作用
+      btn.textContent=e;
+      btn.addEventListener("click",()=>{$("#ef-e").value=e;});
+      echipsRow.appendChild(btn);
+    }
+  }
+  $("#eform").classList.add("on");
+  setTimeout(()=>{const f=$(isStay||st.ix!=null?"#ef-w":"#ef-t");if(f)f.focus();},0);
+}
+function closeForm(){
+  EF=null;
+  const f=$("#eform"); if(f)f.classList.remove("on");
+  cancelPick();clearTimeout(qTimer);qSeq++;_clearRestoreBtn();
+}
+/* P19 增量平移(方案 A):改某条时间→询问后把该天其后各时间点同步 ±Δ(渡轮/飞行等固定班次跳过);不引入时长模型 */
+function hhmmToMin(t){const m=String(t||"").match(/^(\d{1,2}):(\d{2})$/);return m?(+m[1]*60+ +m[2]):null;}
+function minToHHMM(v){v=Math.max(0,Math.min(1439,v));return String(Math.floor(v/60)).padStart(2,"0")+":"+String(v%60).padStart(2,"0");}
+function shiftTimesAfter(d,fromIx,deltaMin){
+  for(let i=fromIx+1;i<d.items.length;i++){
+    if(d.items[i].ferry)continue;                 // 渡轮/飞行固定班次不挪
+    const m=hhmmToMin(d.items[i].t); if(m==null)continue;
+    d.items[i].t=minToHHMM(m+deltaMin);
+  }
+}
+function saveForm(){
+  if(!EF||!TRIP||!TRIP.days[EF.di])return;
+  const isStay=EF.kind==="stay", err=[];
+  const w=$("#ef-w").value.trim(), note=$("#ef-note").value.trim(), llv=$("#ef-ll").value.trim();
+  let lat=null,lng=null,t="",e="",url="",p="";
+  if(llv){
+    const m=llv.match(COORD_RE);
+    if(!m)err.push("坐标格式应为「lat, lng」");
+    else{lat=+parseFloat(m[1]).toFixed(5);lng=+parseFloat(m[2]).toFixed(5);   // 保存边界统一 5 位圆整,手填/粘贴同权
+      if(!(lat>=-90&&lat<=90))err.push("纬度须在 ±90 内");
+      if(!(lng>=-180&&lng<=180))err.push("经度须在 ±180 内");}
+  }
+  if(SEP_BAD.test(w)||SEP_BAD.test(note))err.push("标题/备注不能含「｜」「|」分隔符");
+  if(COORD_IN.test(w)||COORD_IN.test(note))err.push("文本不能含「@纬度,经度」片段(会被解析为坐标)");
+  if(isStay){
+    if(!w)err.push("住宿名称必填");
+    p=$("#ef-p").value.trim();
+    if(SEP_BAD.test(p))err.push("价格不能含「｜」「|」");
+    if(COORD_IN.test(p))err.push("价格不能含「@纬度,经度」片段");
+  }else{
+    t=$("#ef-t").value.trim();
+    e=$("#ef-e").value.trim()||"📍";
+    url=$("#ef-url").value.trim();
+    if(!TIME_RE.test(t))err.push("时间须为 HH:MM(00:00–23:59)");
+    if(/\s/.test(e)||SEP_BAD.test(e))err.push("emoji 不能含空格或「｜」「|」");
+    if(url&&!/^https?:\/\//.test(url))err.push("URL 须以 http:// 或 https:// 开头(小写)");
+    if(url&&(SEP_BAD.test(url)||/\s/.test(url)))err.push("URL 不能含空格或「｜」「|」");
+    // 谷歌地图分享链接含「@lat,lng」:reparse 时会被 parser 当条目坐标吃掉且 URL 被截断 → @→%40(URL 语义等价、无损)
+    if(url&&COORD_IN.test(url))url=url.replace(/@/g,"%40");
+    // parser 对「｜」段做 ^https?:// 判定:以 URL 开头的备注 reparse 后会漂移成 url / 整段丢失,入口拦截
+    if(note&&/^https?:\/\//.test(note))err.push("备注不能以 http(s):// 开头(再解析会被当成链接,备注丢失);请放 URL 栏或在前面加文字");
+  }
+  if(err.length){$("#ef-err").textContent=err.join("；");return;}
+  const st=EF;
+  // P19 编辑已有条目且改了时间 → 询问是否把其后各时间点同步顺延/提前 Δ 分钟
+  let shift=0,shiftN=0;
+  if(!isStay&&st.ix!=null){
+    const om=hhmmToMin(TRIP.days[st.di].items[st.ix].t), nm=hhmmToMin(t);
+    if(om!=null&&nm!=null&&nm!==om){
+      const after=TRIP.days[st.di].items.slice(st.ix+1).filter(x=>hhmmToMin(x.t)!=null&&!x.ferry).length;
+      if(after>0){const dlt=nm-om;
+        if(confirm("把这条之后的 "+after+" 个时间点也"+(dlt>0?"顺延 "+dlt:"提前 "+(-dlt))+" 分钟?(渡轮/飞行等固定班次不动)")){shift=dlt;shiftN=after;}}
+    }
+  }
+  commitEdit(T=>{
+    const d=T.days[st.di];
+    if(isStay)d.stay={h:w,p,note,lat,lng};
+    else{
+      const it={t,e,w,note,url,lat,lng,ferry:false};     // ferry 等派生值由事务内 reparse 重算
+      if(st.ix!=null)d.items[st.ix]=it; else d.items.splice(st.at,0,it);
+      if(shift)shiftTimesAfter(d,st.ix,shift);
+    }
+  },shiftN?("已保存,后续 "+shiftN+" 条已"+(shift>0?"顺延":"提前")):"已保存");
+}
+$("#ef-save").onclick=saveForm;
+$("#ef-cancel").onclick=()=>closeForm();
+$("#ef-del").onclick=()=>{   // P10.3 表单内删除(双击编辑无需进编辑模式;commitEdit 内部会 closeForm)
+  if(!EF)return;
+  const di=EF.di,d=TRIP.days[di]; if(!d)return;
+  if(EF.kind==="stay"){
+    if(!d.stay||!confirm("删除 "+d.id+" 住宿「"+(d.stay.h||"")+"」?"))return;
+    commitEdit(T=>{T.days[di].stay=null;},"已删除住宿");
+  }else{
+    const it=d.items[EF.ix]; if(it==null)return;
+    if(!confirm("删除条目「"+(it.t||"")+" "+(it.w||"")+"」?"))return;
+    commitEdit(T=>{T.days[di].items.splice(EF.ix,1);},"已删除");
+  }
+};
+
+/* —— 3.5 跨天移动 —— */
+function moveItem(dir){
+  if(!EF||EF.kind!=="item"||EF.ix==null)return;
+  const st=EF, dj=st.di+dir;
+  if(dj<0||dj>=TRIP.days.length)return;
+  const tgt=TRIP.days[dj].id;
+  commitEdit(T=>{
+    const it=T.days[st.di].items.splice(st.ix,1)[0];
+    if(dir<0)T.days[dj].items.push(it); else T.days[dj].items.unshift(it);
+  },"已移到 "+tgt+(dir<0?" 末":" 初"));
+}
+$("#ef-prev").onclick=()=>moveItem(-1);
+$("#ef-next").onclick=()=>moveItem(1);
+
+/* —— 点地图取点:一次性 map click,Esc 取消 —— */
+function cancelPick(){if(pickHandler){map.off("click",pickHandler);pickHandler=null;}}
+$("#ef-pick").onclick=()=>{
+  cancelPick();
+  pickHandler=ev=>{pickHandler=null;
+    const llEl=$("#ef-ll"); if(llEl)llEl.value=ev.latlng.lat.toFixed(5)+", "+ev.latlng.lng.toFixed(5);
+    toast("已取点回填坐标");};
+  map.once("click",pickHandler);
+  toast("在地图上点一下取坐标(Esc 取消)");
+};
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  if(!$("#actionsheet").hidden){closeActionSheet();return;}   // P10.3 动作单优先关
+  if(pickHandler){cancelPick();toast("已取消取点");}
+  else if(EF)closeForm();
+  else if($("#cform").classList.contains("on"))closeCons();
+});
+
+/* —— 坐标搜索(契约):拉丁≥3字符防抖300ms→Photon(当日锚点偏置);含CJK→回车→Nominatim(节流1s)+Open-Meteo 并行;
+      粘贴 "lat, lng" 纯本地;失败/空结果给降级文案,点地图取点永远可用 —— */
+function efAnchor(){
+  if(EF&&TRIP&&TRIP.days[EF.di]){
+    const p=dayPoints(TRIP.days[EF.di]); if(p.length)return p[0];
+    const pv=prevStayPoint(EF.di); if(pv)return pv;
+  }
+  return {lat:57.41,lng:-6.19};   // 契约缺省锚:波特里
+}
+function showDeg(msg){const el=$("#ef-deg");el.textContent=msg||"";el.style.display=msg?"block":"none";}
+function _clearRestoreBtn(){
+  _origTitle=null;
+  const row=$("#ef-restore-row"); if(row){row.innerHTML="";row.style.display="none";}
+}
+function _showRestoreBtn(){
+  const row=$("#ef-restore-row"); if(!row)return;
+  // 无原值(首次选中时旧值为空):只需隐藏按钮,不显示恢复入口
+  if(_origTitle===null){row.style.display="none";return;}
+  const btn=document.createElement("button");
+  btn.type="button";btn.className="efb";
+  btn.style.cssText="font-size:11.5px;padding:3px 8px;flex:none;margin:0";
+  btn.innerHTML="↩ 恢复原标题「"+esc(_origTitle)+"」";
+  btn.onclick=()=>{
+    const wEl=$("#ef-w"); if(wEl)wEl.value=_origTitle;
+    _clearRestoreBtn();
+  };
+  row.innerHTML="";row.appendChild(btn);row.style.display="block";
+}
+function showRes(list){
+  const el=$("#ef-res");
+  if(!list.length){el.innerHTML="";el.style.display="none";return;}
+  el.innerHTML=list.map(r=>'<div class="efr" data-lat="'+esc(r.lat)+'" data-lng="'+esc(r.lng)+'" data-name="'+esc(r.name||"")+'">'+
+    (r.src?'<span class="eft">'+esc(r.src)+"</span>":"")+'<span class="efn">'+esc(r.name||r.label)+"</span>"+
+    '<div class="efl">'+esc(r.label)+"</div></div>").join("");
+  el.style.display="block";
+}
+$("#ef-res").addEventListener("click",e=>{
+  const r=e.target.closest(".efr"); if(!r)return;
+  const la=parseFloat(r.dataset.lat), ln=parseFloat(r.dataset.lng);
+  if(isFinite(la)&&isFinite(ln)){const llEl=$("#ef-ll");if(llEl)llEl.value=la.toFixed(5)+", "+ln.toFixed(5);}
+  const wEl=$("#ef-w");
+  if(wEl&&r.dataset.name){
+    const newName=r.dataset.name, cur=wEl.value.trim();
+    // 非空且与新名不同:记录最早的原始值(用户手写),显示恢复按钮
+    if(cur&&cur!==newName&&_origTitle===null)_origTitle=cur;
+    wEl.value=newName;
+    _showRestoreBtn();
+  }
+  showRes([]);
+});
+async function photonSearch(q){
+  const seq=++qSeq, a=efAnchor();
+  try{
+    const r=await fetchTO("https://photon.komoot.io/api/?q="+encodeURIComponent(q)+"&limit=5&lat="+a.lat+"&lon="+a.lng,null,5000);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    if(seq!==qSeq)return;
+    const list=(j.features||[]).filter(f=>f&&f.geometry&&Array.isArray(f.geometry.coordinates)).map(f=>({
+      src:"",name:(f.properties&&f.properties.name)||"",
+      label:[f.properties&&f.properties.name,f.properties&&f.properties.city,f.properties&&f.properties.country].filter(Boolean).join(", "),
+      lat:+f.geometry.coordinates[1],lng:+f.geometry.coordinates[0]}))   // GeoJSON 坐标序 [lng,lat];+强转+isFinite:非数字响应不得进 DOM 属性
+      .filter(x=>isFinite(x.lat)&&isFinite(x.lng));
+    if(list.length){showRes(list);showDeg("");}
+    else{showRes([]);showDeg("未找到「"+q+"」,可尝试换词或点地图取点");}
+  }catch(e){if(seq===qSeq){showRes([]);showDeg("搜索不可用 — 可点地图取点,或粘贴坐标(如 57.27, -5.51)");}}
+}
+async function cjkSearch(q){
+  const now=Date.now(); if(now-lastNomTs<1000)return;   // Nominatim 政策:≤1 req/s
+  lastNomTs=now;
+  const seq=++qSeq, enc=encodeURIComponent(q);
+  const [nr,or]=await Promise.allSettled([
+    fetchTO("https://nominatim.openstreetmap.org/search?q="+enc+"&format=jsonv2&limit=5&accept-language=zh",null,5000).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}),
+    fetchTO("https://geocoding-api.open-meteo.com/v1/search?name="+enc+"&count=5&language=zh",null,5000).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+  ]);
+  if(seq!==qSeq)return;
+  const nom=(nr.status==="fulfilled"&&Array.isArray(nr.value))?nr.value.slice()
+    .sort((a,b)=>(b.importance||0)-(a.importance||0)).slice(0,3)
+    .map(x=>({src:"OSM",name:x.name||String(x.display_name||"").split(",")[0].trim(),
+      label:x.display_name||"",lat:parseFloat(x.lat),lng:parseFloat(x.lon)}))   // lat/lon 是字符串,必须 parseFloat
+    .filter(x=>isFinite(x.lat)&&isFinite(x.lng)):null;
+  const om=(or.status==="fulfilled"&&or.value&&Array.isArray(or.value.results))?or.value.results.slice(0,3)
+    .map(x=>({src:"城市",name:x.name||"",label:[x.name,x.admin1,x.country].filter(Boolean).join(", "),
+      lat:+x.latitude,lng:+x.longitude}))                 // 同 Photon:+强转防非数字注入 DOM 属性
+    .filter(x=>isFinite(x.lat)&&isFinite(x.lng)):null;
+  if(nom===null&&om===null){showRes([]);showDeg("搜索不可用 — 可点地图取点,或粘贴坐标(如 57.27, -5.51)");return;}
+  const list=(nom||[]).slice();
+  for(const o of (om||[]))                                // 去重:与已留 Nominatim 条目 <0.05°(约4km) 视为同位
+    if(!list.some(x=>Math.abs(x.lat-o.lat)<0.05&&Math.abs(x.lng-o.lng)<0.05))list.push(o);
+  if(!list.length){showRes([]);showDeg("未找到「"+q+"」,可尝试英文名或点地图取点");return;}
+  showRes(list);showDeg("");
+}
+$("#ef-q").addEventListener("input",()=>{
+  const q=$("#ef-q").value.trim();
+  clearTimeout(qTimer);qSeq++;                            // 作废在飞结果
+  const m=q.match(COORD_RE);                              // 粘贴坐标:纯本地,跳过一切网络
+  if(m){
+    const la=parseFloat(m[1]), ln=parseFloat(m[2]);
+    if(la>=-90&&la<=90&&ln>=-180&&ln<=180){
+      $("#ef-ll").value=la.toFixed(5)+", "+ln.toFixed(5);
+      showRes([]);showDeg("已识别坐标并填入 ↓");return;
+    }
+  }
+  if(/[^\x00-\x7F]/.test(q)){showRes([]);showDeg("含中文/非拉丁字符:按回车搜索(OSM + 城市库)");return;}   // 禁逐键
+  if(q.length<3){showRes([]);showDeg("");return;}
+  qTimer=setTimeout(()=>photonSearch(q),300);
+});
+$("#ef-q").addEventListener("keydown",e=>{
+  if(e.key!=="Enter")return;
+  e.preventDefault();
+  const q=$("#ef-q").value.trim(); if(!q||q.match(COORD_RE))return;
+  if(/[^\x00-\x7F]/.test(q))cjkSearch(q);
+  else if(q.length>=3){clearTimeout(qTimer);photonSearch(q);}
+});
+
+/* ---------- 行程切换下拉 ---------- */
+function tripIdOf(file){return file.replace(/\.[^./]+$/,"");}
+function tripLabel(file){const t=(TRIPS||[]).find(x=>x.file===file);return t&&t.label?t.label:file;}
+function tripsDDHtml(){
+  if(!TRIPS||!TRIPS.length)
+    return '<div class="ddi dis"><span class="ck"></span>无行程清单：file:// 打开或 trips.json 加载失败（当前为兜底数据）</div>';
+  return TRIPS.map(t=>'<div class="ddi'+(t.file===TRIP_FILE?" on":"")+'" data-file="'+esc(t.file)+'">'+
+    '<span class="ck">'+(t.file===TRIP_FILE?"✓":"")+'</span>'+esc(t.label||t.file)+"</div>").join("");
+}
+function toggleDD(open){
+  const dd=$("#tripdd"), row=$("#t-row");
+  const on=open!==undefined?open:!dd.classList.contains("open");
+  if(on){dd.innerHTML=tripsDDHtml();dd.style.top=($("#phead").offsetHeight+4)+"px";}
+  dd.classList.toggle("open",on);row.classList.toggle("open",on);
+}
+$("#t-row").onclick=e=>{e.stopPropagation();toggleDD();};
+$("#tripdd").addEventListener("click",async e=>{
+  e.stopPropagation();
+  const it=e.target.closest(".ddi"); if(!it||it.classList.contains("dis"))return;
+  toggleDD(false);
+  const f=it.dataset.file; if(!f||f===TRIP_FILE)return;
+  try{if(await loadTrip(f))toast("已切换：「"+tripLabel(f)+"」");}   // false=已被更晚的点击/导入取代,静默让位
+  catch(err){toast("切换失败："+err.message);}
+});
+document.addEventListener("click",()=>toggleDD(false));
+
+/* ---------- 时区(P1.4 运行层):MD 缺省时按首坐标自动判定,缓存键含 tripId+首坐标指纹 ---------- */
+function refreshWarnUI(){
+  if(!TRIP)return;
+  const wN=allWarnings().length;
+  const ntBtn=document.querySelector('#tabs button[data-tab="nt"]');
+  if(ntBtn)ntBtn.innerHTML="须知"+(wN?'<span class="tbadge">'+wN+"</span>":"");
+  if(tab==="nt")renderPanel();
+}
+function markTzResolved(tz,how){
+  const W=TRIP.warnings||[],i=W.findIndex(w=>w.includes("缺「时区」"));
+  if(i>=0){W[i]="meta 缺「时区」:已按首坐标"+how+"为 "+tz+",建议在 MD 写入「- 时区: "+tz+"」固化";refreshWarnUI();}
+}
+async function resolveTz(){
+  /* 作废守卫用 TRIP_ID+loadSeq 令牌,不用 TRIP 对象身份:commitEdit 每次事务都换 TRIP 对象但不换行程,
+     对象身份守卫会把「在飞窗口内编辑一次」误判为切行程 → TRIP_TZ 终生为空、日出日落退回浏览器时区且不再自愈 */
+  const T=TRIP, myId=TRIP_ID, mySeq=loadSeq;
+  if(T.meta.tz){TRIP_TZ=T.meta.tz;return;}
+  let pt=null;
+  outer:for(const d of T.days){
+    for(const it of d.items)if(it.lat!=null){pt=it;break outer;}
+    if(d.stay&&d.stay.lat!=null){pt=d.stay;break outer;}
+  }
+  if(!pt){TRIP_TZ=Intl.DateTimeFormat().resolvedOptions().timeZone;return;}
+  const ckey="tzauto."+pt.lat+","+pt.lng;      // 缓存键掺首坐标指纹:换导入文件/改 MD 首坐标即自然失效
+  const cached=store.get(ckey,"");
+  if(cached){TRIP_TZ=cached;markTzResolved(cached,"自动判定(缓存)");return;}
+  try{
+    const r=await fetchTO("https://api.open-meteo.com/v1/forecast?latitude="+pt.lat+"&longitude="+pt.lng+
+      "&daily=weather_code&timezone=auto&forecast_days=1",null,8000);   // 必带超时:裸 fetch 挂网永不 settle → 太阳时刻永停浏览器 TZ + 天气连坐不加载
+    const j=await r.json();
+    if(!j||!j.timezone)throw new Error("响应缺 timezone 字段");
+    if(TRIP_ID!==myId||loadSeq!==mySeq)return;   // 期间已切行程/导入,作废(编辑不 bump 令牌,放行)
+    TRIP_TZ=j.timezone;store.set(ckey,j.timezone);markTzResolved(j.timezone,"自动判定");
+  }catch(e){
+    if(TRIP_ID!==myId||loadSeq!==mySeq)return;
+    TRIP_TZ=Intl.DateTimeFormat().resolvedOptions().timeZone;
+    (TRIP.warnings||(TRIP.warnings=[])).push("时区自动判定失败("+e.message+"),临时使用浏览器时区 "+TRIP_TZ);
+    refreshWarnUI();
+  }
+}
+
+/* ---------- 固化中心(P3.6):四类自动值 → 统一编辑事务回写进 MD ----------
+   ① 时区 meta.tz←TRIP_TZ ② 日出日落 d.sun←自动 ③ 天气 d.wx←当前取到的自动文案 ④ 驾驶 d.drive←追加/替换「· 实测 …」段。
+   每行展示「当前 MD 值 → 自动值」+勾选;未取到自动值的项置灰不可勾。点「固化所选」走 commitEdit(进草稿)。 */
+const DRIVE_AUTO_RE=/(^|\s*·\s*)实测\s*[\d.]+\s*km\s*·\s*[0-9hm]+/g;   // 已固化过的「实测 X km · XhYm」自动段;前导「·」可选(orig 原为空时固化结果无前缀),g 一次清光历史残留多段
+function autoSunText(di){const s=daySun(di);return s.ok?(hhmm(s.sunrise)+" / "+hhmm(s.sunset)):"";}
+function autoWxText(di){
+  const r=readDayWx(di); if(!r||!r.w)return "";
+  return wxStr(r.w)+"（"+r.badge+"）";   // 含来源徽标文字,如「🌧 11–15℃ ☔79%（预报）」/「（近10年同日）」
+}
+function autoDriveText(di){
+  const st=dayDriveStats(di); if(!st.complete||!(st.segs>0))return "";
+  return "实测 "+st.km+" km · "+fmtDur(st.min);
+}
+function applyDriveAuto(orig,auto){   // 幂等:先清掉全部既有自动段,再统一追加(不动人写的提醒文字)
+  const base=(orig||"").replace(DRIVE_AUTO_RE,"").replace(/^\s*·\s*/,"").trim();
+  return base?base+" · "+auto:auto;
+}
+/* 四类候选:[{key,label,rows:[{id,di?,cur,next,can}], apply(T,selSet)}]。row.can=false→置灰不可勾。 */
+function consCats(){
+  const cats=[];
+  // ① 时区
+  const tzCur=(TRIP.meta.tz||"").trim();
+  cats.push({key:"tz",label:"时区 meta",
+    rows:[{id:"meta",cur:tzCur||"(未写)",next:TRIP_TZ||"",can:!!TRIP_TZ&&TRIP_TZ!==tzCur}],
+    apply:(T,sel)=>{if(sel.has("tz:meta")&&TRIP_TZ)T.meta.tz=TRIP_TZ;}});   // 必须查勾选集(与 sun/wx/drive 同约);TRIP_TZ 在飞时绝不写空值
+  // ② 日出日落
+  const sunRows=TRIP.days.map((d,di)=>{const a=autoSunText(di);
+    // !!TRIP_TZ:resolveTz 在飞窗口(TRIP_TZ==="")sunFmt 退回浏览器时区,此刻固化会把北京时间时刻写进 MD;失败回退已显式置 TZ+黄牌,放行
+    return {id:d.id,di,cur:(d.sun||"").trim()||"(未写)",next:a,can:!!TRIP_TZ&&!!a&&a!==(d.sun||"").trim()};});
+  cats.push({key:"sun",label:"日出日落 各天 sun",rows:sunRows,
+    apply:(T,sel)=>{T.days.forEach((d,di)=>{if(sel.has("sun:"+d.id)){const a=autoSunText(di);if(a)d.sun=a;}});}});
+  // ③ 天气
+  const wxRows=TRIP.days.map((d,di)=>{const a=autoWxText(di);
+    return {id:d.id,di,cur:(d.wx||"").trim()||"(未写)",next:a,can:!!a&&a!==(d.wx||"").trim()};});
+  cats.push({key:"wx",label:"天气 各天 wx",rows:wxRows,
+    apply:(T,sel)=>{T.days.forEach((d,di)=>{if(sel.has("wx:"+d.id)){const a=autoWxText(di);if(a)d.wx=a;}});}});
+  // ④ 驾驶
+  const drRows=TRIP.days.map((d,di)=>{const a=autoDriveText(di);
+    const next=a?applyDriveAuto(d.drive||"",a):"";
+    return {id:d.id,di,cur:(d.drive||"").trim()||"(未写)",next,can:!!a&&next!==(d.drive||"").trim()};});
+  cats.push({key:"drive",label:"驾驶 各天 drive(追加/替换「· 实测」段,保留手写提醒)",rows:drRows,
+    apply:(T,sel)=>{T.days.forEach((d,di)=>{if(sel.has("drive:"+d.id)){const a=autoDriveText(di);if(a)d.drive=applyDriveAuto(d.drive||"",a);}});}});
+  return cats;
+}
+let consCatsCache=null;
+function renderCons(){
+  const cats=consCatsCache=consCats();
+  const anyCan=cats.some(c=>c.rows.some(r=>r.can));
+  const body=$("#cbody"), empty=$("#cempty");
+  if(!anyCan){
+    body.innerHTML="";empty.textContent="当前没有可固化的新自动值(各项自动值要么未取到,要么已与 MD 一致)。先让天气/路线算完再来。";empty.style.display="block";
+    return;
+  }
+  empty.style.display="none";
+  body.innerHTML=cats.map(c=>{
+    const canRows=c.rows.filter(r=>r.can);
+    const rowsH=c.rows.map(r=>{
+      const cid=c.key+":"+(r.id||"meta");
+      const idTag=c.key==="tz"?"":'<span class="ck-id">'+esc(r.id)+"</span> ";
+      return '<label class="crow"><input type="checkbox" data-cck="'+esc(cid)+'"'+(r.can?"":" disabled")+(r.can?" checked":"")+">"+
+        '<span class="cl">'+idTag+'<span class="cv-old">'+esc(r.cur)+'</span><span class="cv-arr">→</span>'+
+        '<span class="cv-new">'+(r.next?esc(r.next):"(无自动值)")+"</span></span></label>";
+    }).join("");
+    return '<div class="csec"><label class="ch"><input type="checkbox" data-call="'+esc(c.key)+'"'+
+      (canRows.length?" checked":" disabled")+">"+esc(c.label)+
+      '<span class="cn">'+canRows.length+" 项可固化</span></label>"+rowsH+"</div>";
+  }).join("");
+}
+function openCons(){
+  if(!TRIP)return;
+  closeForm();
+  renderCons();
+  $("#cform").classList.add("on");
+}
+function closeCons(){$("#cform").classList.remove("on");consCatsCache=null;}
+$("#cons").onclick=()=>{const f=$("#cform");if(f.classList.contains("on"))closeCons();else openCons();};
+$("#cf-cancel").onclick=()=>closeCons();
+$("#cform").addEventListener("change",e=>{
+  const all=e.target.closest("[data-call]");   // 类总开关:联动该类下所有可勾行
+  if(all){const key=all.getAttribute("data-call"),on=all.checked;
+    $("#cform").querySelectorAll('[data-cck^="'+key+':"]:not(:disabled)').forEach(b=>{b.checked=on;});}
+});
+$("#cf-save").onclick=()=>{
+  if(!consCatsCache)return;
+  const sel=new Set();
+  $("#cform").querySelectorAll("[data-cck]:checked").forEach(b=>{if(!b.disabled)sel.add(b.getAttribute("data-cck"));});
+  if(!sel.size){toast("没有勾选任何项");return;}
+  const cats=consCatsCache, n=sel.size;
+  const ok=commitEdit(T=>{cats.forEach(c=>c.apply(T,sel));},"已固化 "+n+" 项进草稿");
+  if(ok)closeCons();
+};
+
+/* ---------- 存回文件(P3.7 / File System Access API,仅 Chrome/Edge 桌面) ----------
+   feature-detect showSaveFilePicker → 显示「💾 存回文件」;首次取 handle 存内存,后续直接 write;成功清 draft 键 + toast。 */
+let fileHandle=null;
+function fsaSupported(){return typeof window.showSaveFilePicker==="function";}
+function fsaSuggestName(){
+  if(TRIP_FILE)return TRIP_FILE.split("/").pop();
+  if(TRIP&&TRIP.meta&&TRIP.meta.title)return TRIP.meta.title+".md";
+  return "trip.md";
+}
+async function saveBackToFile(){
+  if(!fsaSupported())return;
+  try{
+    if(!fileHandle){
+      fileHandle=await window.showSaveFilePicker({suggestedName:fsaSuggestName(),
+        types:[{description:"Markdown",accept:{"text/markdown":[".md",".markdown"]}}]});
+    }
+    const w=await fileHandle.createWritable();
+    await w.write(SRC);await w.close();
+    ORIG_SRC=SRC;   // 磁盘已是当前版本:同步基线,否则「弃草稿」会回退到比磁盘更旧的版本,再存回即覆盖已保存的编辑
+    store.del("draft");draftActive=false;updateSrcHint();
+    toast("已写回文件「"+(fileHandle.name||"")+"」,草稿已清");
+  }catch(e){
+    if(e&&e.name==="AbortError")return;   // 用户取消选择,静默
+    fileHandle=null;                      // 句柄失效(如权限丢失):下次重新选
+    toast("写回文件失败:"+(e&&e.message||e));
+  }
+}
+if(fsaSupported()){const fb=$("#fsave");if(fb){fb.hidden=false;fb.onclick=saveBackToFile;}}
+
+/* ---------- 存回仓库(P9 / Cloudflare Functions + GitHub) ----------
+   按钮先能力探测 /api/status:普通 http.server 没有后端时隐藏;保存成功清草稿,409 绝不覆盖远端。 */
+let repoSaveOK=false,repoSaving=false,offSeq=0;
+function updateRepoSaveButton(){
+  const b=$("#rsave"); if(!b)return;
+  b.hidden=!(repoSaveOK&&TRIPS&&TRIP_FILE&&TRIP_ID!=="preview");
+}
+async function detectRepoSave(){
+  if(location.protocol!=="http:"&&location.protocol!=="https:"){repoSaveOK=false;updateRepoSaveButton();return;}
+  try{
+    const r=await fetchTO("api/status",{cache:"no-store"},3500);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    repoSaveOK=!!(j&&j.authenticated&&j.repoConfigured&&j.repoReachable);
+  }catch(e){repoSaveOK=false;}
+  updateRepoSaveButton();
+}
+async function sha256Text(s){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(s)));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+async function handleRepoConflict(j){
+  toast("远端已变,当前草稿已保留,不会覆盖");
+  if(confirm("远端已变。点“确定”先下载当前草稿;点“取消”继续留在本页。"))exportMd((TRIP_FILE||"trip").replace(/\.md$/,"")+"-本地草稿.md");
+  if(j&&j.remoteMd&&confirm("是否导入远端最新版作为预览? 当前草稿仍留在浏览器本地,刷新会再次提示草稿。")){
+    try{
+      const id=tripIdOf(TRIP_FILE);
+      loadSeq++;
+      init(j.remoteMd,id,{noDraft:true});
+      TRIP_FILE=TRIPS&&TRIPS.some(t=>t.file===id+".md")?id+".md":TRIP_FILE;
+      ORIG_SRC=j.remoteMd;draftActive=false;updateSrcHint();
+      toast("已加载远端最新版预览");
+    }catch(e){toast("远端版本导入失败:"+e.message);}
+  }else if(confirm("是否放弃本地草稿并刷新远端版本?")){
+    store.del("draft");location.reload();
+  }
+}
+async function saveBackToRepo(){
+  if(repoSaving)return;
+  if(!TRIP_FILE||TRIP_ID==="preview"){toast("导入预览不能直接存回仓库");return;}
+  if(!repoSaveOK){toast("远端保存未配置或登录已过期");detectRepoSave();return;}
+  const btn=$("#rsave");
+  repoSaving=true;if(btn){btn.disabled=true;btn.textContent="⏳ 存回中";}
+  try{
+    const r=await fetchTO("api/save",{method:"POST",cache:"no-store",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({file:TRIP_FILE,md:SRC,baseHash:await sha256Text(ORIG_SRC)})},25000);
+    let j=null;try{j=await r.json();}catch(e){}
+    if(r.status===401){toast("登录已过期,请重新登录");location.href="login?next="+encodeURIComponent(location.pathname+location.search);return;}
+    if(r.status===409){await handleRepoConflict(j||{});return;}
+    if(!r.ok||!j||!j.ok)throw new Error((j&&(j.detail||j.error))||("HTTP "+r.status));
+    ORIG_SRC=SRC;store.del("draft");draftActive=false;updateSrcHint();
+    toast(j.noChange?"远端已是最新,无需提交":("已提交 "+(j.short||"")+";部署完成后刷新可见"));
+  }catch(e){toast("存回仓库失败:"+(e&&e.message||e));}
+  finally{repoSaving=false;if(btn){btn.disabled=false;btn.textContent="☁ 存回仓库";}}
+}
+const rb=$("#rsave");if(rb)rb.onclick=saveBackToRepo;
+
+/* ---------- 动作单 ☰(P10.3):命令容器,只触发现有按钮/函数,不复制业务逻辑 ---------- */
+async function ensureOfflineMapReady(){
+  try{
+    await updateOfflineMapButtons();
+    if(offlineMapManifest&&!offlineMapCached)await downloadOfflineMap();
+    else if(offlineMapCached)await maybeShowOfflineMap();
+  }catch(e){toast("离线地图准备失败:"+(e&&e.message||e));}
+}
+async function nightBefore(){          // 🧳 出发前一晚:预热完成后打开固化中心
+  try{await runWarmup();}catch(e){}
+  await ensureOfflineMapReady();
+  if(TRIP)openCons();
+}
+let _asRows=null;
+function buildActionSheet(){
+  const vis=id=>{const b=$(id);return !!(b&&!b.hidden);};
+  const rows=[
+    {l:editMode?"✏️ 退出编辑":"✏️ 编辑",f:()=>setEditMode(!editMode)},
+    {l:"📌 固化",f:openCons},
+    {l:"⚡ 预热",f:runWarmup},
+    {l:"🧳 出发前一晚",f:nightBefore,cls:"pri full"},
+    {l:"⬇ 导出 .md",f:()=>$("#exp").click()},
+    {l:"⬆ 导入 .md",f:()=>$("#imp").click()},
+  ];
+  if(vis("#fsave"))rows.push({l:"💾 存回文件",f:()=>$("#fsave").click()});
+  if(vis("#rsave"))rows.push({l:"☁ 存回仓库",f:()=>$("#rsave").click()});
+  if(vis("#omap"))rows.push({l:$("#omap").textContent.trim()||"🗺 地图",f:()=>$("#omap").click()});
+  if(vis("#omapclear"))rows.push({l:"✕ 离线地图",f:()=>$("#omapclear").click()});
+  _asRows=rows;
+  let h='<h4>更多操作</h4><div class="asgrid">';
+  rows.forEach((r,i)=>{h+='<button class="asb '+(r.cls||"")+'" data-i="'+i+'">'+esc(r.l)+"</button>";});
+  h+="</div>";
+  const off=($("#offHint").textContent||"").trim();
+  const src=srcHintText();
+  h+='<div class="asstat">'+(off?esc(off)+"<br>":"")+esc(src)+
+    (draftActive?' · <span class="draft-badge">● 草稿</span><button class="dft-x" id="as-dft">弃草稿</button>':"")+"</div>";
+  h+='<button class="asb full" id="as-close" style="margin-top:9px">关闭</button>';
+  return h;
+}
+function openActionSheet(){$("#actionsheet").innerHTML=buildActionSheet();$("#actionsheet").hidden=false;$("#actbackdrop").hidden=false;}
+function closeActionSheet(){$("#actionsheet").hidden=true;$("#actbackdrop").hidden=true;_asRows=null;}
+$("#actbtn").onclick=e=>{e.stopPropagation();if($("#actionsheet").hidden)openActionSheet();else closeActionSheet();};
+$("#actbackdrop").onclick=closeActionSheet;
+$("#actionsheet").addEventListener("click",e=>{
+  const b=e.target.closest("button");if(!b)return;
+  if(b.id==="as-close")return closeActionSheet();
+  if(b.id==="as-dft"){closeActionSheet();discardDraft();return;}
+  const i=b.dataset.i;
+  if(i!=null&&_asRows&&_asRows[+i]){const f=_asRows[+i].f;closeActionSheet();f();}   // 先关再执行,异步命令(预热)自带 toast
+});
+
+/* ---------- 离线状态(P11):页面侧查 Cache API,不改 SW 协议 ---------- */
+const OFFLINE_CORE=[
+  "./index.html","./trips.json",
+  encodeURI("./sample-trip.md"),
+  encodeURI("./trip-template.md"),
+  "./trip.data.js","./manifest.webmanifest"
+];
+async function offlineStatusText(){
+  if(location.protocol!=="http:"&&location.protocol!=="https:")return "";
+  if(!("serviceWorker" in navigator))return "离线壳不可用";
+  if(!navigator.serviceWorker.controller)return "⚠ 缓存中...";
+  if(!("caches" in window))return "离线状态不可判定";
+  const hits=await Promise.all(OFFLINE_CORE.map(u=>caches.match(u).then(Boolean).catch(()=>false)));
+  const ready=hits.every(Boolean);
+  let s=ready?"✅ 可离线使用":"⚠ 缓存中...";
+  const mapStatus=await offlineMapStatusText();
+  if(mapStatus)s+=" · "+mapStatus;
+  if(draftActive)s+=" · 有本地草稿";
+  return s;
+}
+async function refreshOfflineStatus(announce){
+  const seq=++offSeq,el=$("#offHint"); if(!el)return;
+  try{
+    const s=await offlineStatusText();
+    if(seq!==offSeq)return;
+    el.textContent=s;
+    if(announce&&/^✅/.test(s)&&!gstore.get("offlineReadyToast",false)){
+      gstore.set("offlineReadyToast",true);toast("已可离线使用");
+    }
+  }catch(e){if(seq===offSeq)el.textContent="离线状态不可判定";}
+}
+if("serviceWorker" in navigator&&location.protocol!=="file:"){
+  navigator.serviceWorker.ready.then(()=>setTimeout(()=>refreshOfflineStatus(true),900)).catch(()=>{});
+  navigator.serviceWorker.addEventListener&&navigator.serviceWorker.addEventListener("controllerchange",()=>setTimeout(()=>refreshOfflineStatus(true),500));
+}
+detectRepoSave();refreshOfflineStatus();
+
+/* ---------- 启动:三级降级链 fetch(trips.json)→fetch(md) → window.TRIP_MD → 文件选择器 ---------- */
+function init(md,tripId,opts){
+  let T=parseTrip(md);                         // 先解析:0 天直接抛错,调用方回滚,不污染现有状态
+  if(!T.days.length)throw new Error("MD 解析不到任何行程日(## Dn 区块)");
+  const newId=tripId||"main";
+  if(newId!==TRIP_ID)fileHandle=null;          // 切行程:旧文件句柄作废,存回须重新选文件
+  TRIP_ID=newId;
+  closeCons();                                 // 切/重载行程:关掉可能开着的固化面板(其缓存指向旧 TRIP)
+  ORIG_SRC=md;draftActive=false;
+  if(!(opts&&opts.noDraft)){                   // P3 草稿恢复:本空间有编辑草稿且与文件不同 → 用草稿,亮「● 草稿」
+    const dr=store.get("draft",null);
+    if(dr&&dr.md&&dr.md!==md){
+      try{const TD=parseTrip(dr.md);if(TD.days.length){T=TD;md=dr.md;draftActive=true;}}catch(e){}
+    }
+  }
+  SRC=md;TRIP=T;
+  dirtyDays.clear();closeForm();
+  clearSunAnchor();   // 行程重载/导入:临时锚随旧行程作废
+  $("#err").style.display="none";
+  if(!TRIP.days.find(d=>d.id===view))view="OV";
+  updateSrcHint();
+  renderPanel();renderMap();
+  if(gmode)gset(gViewUrl());
+  // 时区定后(成功落地真 TZ 或超时/失败 catch 回退 browserTZ,resolveTz 总会 settle):
+  // 补一次 renderPanel(异步窗口内曾用空 TRIP_TZ 渲染 sunRow→北京时间,须用最终 TZ 重绘 + 刷新 sunLints),
+  // 再算天气。loadWeather 放 finally:无论时区成败都调度,避免时区故障静默连坐天气功能。
+  // 守卫同 resolveTz 用 TRIP_ID+loadSeq 令牌(勿用 TRIP 对象身份,编辑事务换对象不换行程)。
+  const myId=TRIP_ID, mySeq=loadSeq;
+  resolveTz().finally(()=>{
+    if(TRIP_ID!==myId||loadSeq!==mySeq)return;
+    renderPanel();
+    // P4.6 行中模式:时区落定后判「今天(trip 时区)在行程内」→ 自动选当天;仅 OV 态跳,不覆盖用户手动选的天
+    if(view==="OV"){const tid=todayDayId();if(tid)setView(tid);}
+    loadWeather();
+  });
+}
+async function loadTrip(file){                  // 返回 true=已提交;false=被更新的加载/导入取代(此时绝不抛错、绝不动状态)
+  const seq=++loadSeq;
+  let r,md;
+  try{
+    r=await fetchTO(encodeURI(file),{cache:"no-cache"});
+    if(seq!==loadSeq)return false;       // 慢网挂起期间用户已另行加载:旧响应作废
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    md=await r.text();
+  }catch(e){if(seq!==loadSeq)return false;throw e;}
+  if(seq!==loadSeq)return false;
+  init(md,tripIdOf(file));               // 解析失败在此抛出 → 不写 lastTrip/URL,原行程保持可用
+  TRIP_FILE=file;
+  gstore.set("lastTrip",file);
+  updateSrcHint();
+  try{history.replaceState(null,"",location.pathname+"?trip="+encodeURIComponent(tripIdOf(file)));}catch(e){}
+  return true;
+}
+function pickTrip(){
+  const q=new URLSearchParams(location.search).get("trip");   // URLSearchParams 已自动 decodeURI
+  if(q){const t=TRIPS.find(x=>x.file===q||tripIdOf(x.file)===q);if(t)return t.file;}
+  const last=gstore.get("lastTrip","");
+  if(last&&TRIPS.some(x=>x.file===last))return last;
+  return TRIPS[0].file;
+}
+async function boot(){
+  setGmode(!!gstore.get("gmode",false));
+  try{                                            // ① 行程清单:失败才视为无多行程能力
+    const r=await fetchTO("trips.json",{cache:"no-cache"});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    const list=((j&&j.trips)||[]).filter(t=>t&&t.file);
+    if(!list.length)throw new Error("trips.json 为空");
+    TRIPS=list;
+  }catch(e){TRIPS=null;}                          // file:// 或清单拉取失败 → 兜底
+  if(TRIPS){                                      // ② 单个 md 失败 ≠ 清单失败:逐个试,保留下拉
+    const first=pickTrip(), errs=[];
+    for(const f of [first,...TRIPS.map(t=>t.file).filter(x=>x!==first)]){
+      try{
+        if(await loadTrip(f)===false)return;   // 挂起期间用户已点选/导入:boot 让位,停止重试循环,不覆盖用户选择
+        if(errs.length)toast("部分行程加载失败:"+errs.join(";")+";已改加载「"+tripLabel(f)+"」");
+        return;
+      }catch(e){errs.push(tripLabel(f)+"("+e.message+")");}
+    }
+    toast("行程 MD 全部加载失败:"+errs.join(";"));   // 下拉仍可用,可重试
+  }
+  if(window.TRIP_MD){
+    try{
+      init(window.TRIP_MD,"main");
+      if(TRIPS)$("#srcHint").textContent="数据：trip.data.js 兜底（行程 MD 加载失败）";
+      return;
+    }catch(e){}
+  }
+  $("#err").style.display="flex";
+}
+boot();
+})();
+</script>
+</body>
+</html>

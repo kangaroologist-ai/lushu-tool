@@ -1,0 +1,25 @@
+{
+  "version": "2026-06-14",
+  "kind": "trip-corridor-geojson",
+  "bufferKm": 10,
+  "bbox": [
+    -5.9534,
+    55.8236,
+    -3.0749,
+    57.6028
+  ],
+  "routeKm": 821,
+  "segmentCount": 9,
+  "featureCount": 40,
+  "source": "Generated from local trip Markdown coordinates; no public raster tiles are cached.",
+  "targetBytes": 20971520,
+  "warnBytes": 62914560,
+  "hardMaxBytes": 83886080,
+  "files": [
+    {
+      "path": "offline-map/corridor.geojson",
+      "bytes": 12305,
+      "role": "leaflet-geojson"
+    }
+  ]
+}

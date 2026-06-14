@@ -1,0 +1,6 @@
+{
+  "trips": [
+    { "file": "sample-trip.md", "label": "示例行程 · Sample" },
+    { "file": "trip-template.md", "label": "空白模板 · Template" }
+  ]
+}
